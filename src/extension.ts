@@ -133,10 +133,15 @@ async function answerWithAutopilot(
 	}
 
 	const pinned = config.judge.model;
-	const model =
-		pinned !== null
-			? ctx.modelRegistry.find(pinned.provider, pinned.model)
-			: ctx.model;
+	const model = pinned !== null ? ctx.modelRegistry.find(pinned.provider, pinned.model) : ctx.model;
+	// A pinned-but-missing model used to degrade silently into "no model
+	// available", which looks identical to a provider outage. Say it out loud:
+	// the user configured this, so the fix is theirs to make.
+	if (pinned !== null && model === undefined) {
+		const message = `judge.model ${pinned.provider}/${pinned.model} is not a known model — falling back to the first option. Fix judge.model in ~/.pi/agent/pi-decide.json, or remove it to use the session model.`;
+		process.stderr.write(`[pi-decide] ${message}\n`);
+		if (config.notify) ctx.ui.notify(message, "error");
+	}
 
 	const result = await runAutopilot(questionnaire, config, {
 		transcript,
@@ -169,11 +174,31 @@ async function answerWithAutopilot(
 			"info",
 		);
 	}
+	// An irreversible decision with no cautious option is the one case the
+	// autopilot must not answer. Report it as a refusal, not as an answer.
+	if (result.refused.length > 0) {
+		if (config.notify) {
+			ctx.ui.notify(
+				`Autopilot refused ${result.refused.length} irreversible question${result.refused.length === 1 ? "" : "s"} — blocked on you (${result.refused.map((item) => item.header).join(", ")}).`,
+				"warning",
+			);
+		}
+		return {
+			answers,
+			outcome: "refused",
+			reason: `an irreversible decision with no cautious option needs a human (${result.refused.map((item) => item.header).join(", ")})`,
+			unanswered: result.refused.map((item) => item.header),
+			refused: result.refused,
+			...(result.guarded.length > 0 ? { guarded: result.guarded } : {}),
+		};
+	}
+
 	return {
 		answers,
 		outcome: source === "timeout" ? "timeout" : "autopilot",
 		reason: result.judged ? result.verdict.summary : (result.fallbackReason ?? result.verdict.summary),
 		unanswered: [],
+		...(result.guarded.length > 0 ? { guarded: result.guarded } : {}),
 	};
 }
 

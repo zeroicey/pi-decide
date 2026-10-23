@@ -34,6 +34,11 @@ export interface Question {
 	recommended?: string;
 	/** Why the recommendation, in a few words. Shown to the user and logged. */
 	recommendedBecause?: string;
+	/**
+	 * This decision cannot be undone. The autopilot may then only take the
+	 * cautious path, and refuses outright when none exists.
+	 */
+	irreversible?: boolean;
 }
 
 /** What the model asked for. This is the tool's validated argument shape. */
@@ -66,13 +71,17 @@ export interface Answer {
 export interface DecisionResult {
 	answers: Answer[];
 	/** How the invocation resolved. */
-	outcome: "answered" | "autopilot" | "timeout" | "cancelled" | "rejected";
+	outcome: "answered" | "autopilot" | "timeout" | "cancelled" | "refused" | "rejected";
 	/** One-line reason for autopilot/timeout resolutions. */
 	reason?: string;
 	/** Free-text note attached to the whole questionnaire. */
 	globalNote?: string;
 	/** Questions that never got an answer (cancelled/rejected paths). */
 	unanswered: string[];
+	/** Irreversible questions the autopilot refused to answer. */
+	refused?: Array<{ questionIndex: number; header: string }>;
+	/** Choices the safety rail steered onto the cautious option. */
+	guarded?: Array<{ questionIndex: number; header: string; chose: string }>;
 }
 
 /** The resolved autopilot behaviour for one invocation. */

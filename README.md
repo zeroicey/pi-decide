@@ -97,17 +97,37 @@ do not re-ask the same questions immediately."*
 
 ## How the autopilot decides
 
-1. **The model's own recommendation wins.** `recommended` (plus
-   `recommendedBecause`) is what the calling agent thinks is best. The judge
-   uses it as the default and only overrides it when the conversation clearly
-   says otherwise.
-2. **Otherwise a judge model reads the transcript.** A bounded excerpt of the
-   recent conversation plus the full question set goes to one non-streaming
-   completion. It returns every answer as JSON with a one-line reason.
+1. **A stated recommendation wins outright, per question.** When the model marks
+   `recommended`, that is the answer — no judge call, no label matching, no
+   chance of drift. The model that wrote the question just did the work with
+   full context; a judge reading a truncated transcript can only add error.
+   This is also the direct answer to *"if the options already contain the best
+   one, just use it."*
+2. **Only un-recommended questions reach a judge.** One non-streaming
+   completion sees a bounded excerpt of the recent conversation plus just those
+   questions, and returns each answer as JSON with a one-line reason. When every
+   question was recommended, no model call happens at all.
 3. **Every failure still produces an answer.** A broken judge, an unreadable
-   reply, an expiry, a timeout — all of them fall back to the stated
-   recommendation (or the first option). The one outcome this feature exists to
-   prevent is a run that waits forever.
+   reply, a timeout — all of them fall back to the first option. The one outcome
+   this feature exists to prevent is a run that waits forever.
+4. **Irreversible questions get a safety rail.** See below.
+
+### The safety rail
+
+"Never block" must not be read as "always act". A question that can destroy
+data, force-push, spend money or publish is not a question an unattended
+autopilot should answer at all. Two layers trip the rail:
+
+- the model setting `irreversible: true` on a question, and
+- a conservative scan of the question, option labels and descriptions
+  (`rm -rf`, `delete`, `drop`, `force push`, `reset --hard`, `publish`,
+  `deploy to prod`, `revoke`, `rotate ... key`, `overwrite`, `wipe`, …).
+
+A tripped question is still answered — but **only** with an option that reads as
+the cautious path (`abort`, `skip`, `keep`, `back up first`, `dry run`, `do
+nothing`). If no such option exists, the call comes back as **refused**: the
+model is told in as many words to stop, finish what is safe, and report the
+decision as blocked on you. A stuck-but-safe run beats a fast destructive one.
 
 The judge never runs on the render path, so a slow model cannot freeze the
 dialog, and the countdown keeps ticking while it thinks.
@@ -141,7 +161,7 @@ wedge the tool.
 | `autopilot.mode` | `"off"` | `off` / `on` / `auto`. |
 | `autopilot.timeoutSeconds` | `180` | Countdown for `auto`. `0` disables it (wait forever). |
 | `ui.bell` | `true` | Terminal BEL when the dialog starts waiting (TUI only). |
-| `judge.model` | `null` | `null` uses the session model. Pin `{"provider":"…","model":"…"}` to decouple the judge from whatever model the run uses. |
+| `judge.model` | `null` | `null` uses the session model. Pin `{"provider":"…","model":"…"}` to decouple the judge from whatever model the run uses. A pinned model that does not resolve now warns loudly instead of degrading silently. |
 | `judge.tailMessages` | `10` | Trailing messages the judge sees. |
 | `judge.maxTailChars` | `8000` | Hard cap on the excerpt. |
 | `judge.timeoutMs` | `90000` | Abort the judge after this long. |

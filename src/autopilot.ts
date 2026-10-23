@@ -26,7 +26,8 @@ import {
 	questionsNeedingJudge,
 } from "./decide.ts";
 import type { DecideConfig } from "./config.ts";
-import type { AutopilotVerdict, Questionnaire } from "./types.ts";
+import { guardChoice } from "./safety.ts";
+import type { AutopilotVerdict, Questionnaire, Recommendation } from "./types.ts";
 
 /** A non-streaming completion through the host's provider layer. */
 export type CompleteFn = (
@@ -56,6 +57,13 @@ export interface AutopilotResult {
 	from: "recommendation" | "judge" | "fallback";
 	/** Why it fell back, when `judged` is false. */
 	fallbackReason?: string;
+	/**
+	 * Questions the autopilot refused to answer because they are irreversible and
+	 * offer no cautious option. Non-empty means the caller must NOT proceed.
+	 */
+	refused: Array<{ questionIndex: number; header: string }>;
+	/** Choices the safety rail steered onto the cautious option. */
+	guarded: Array<{ questionIndex: number; header: string; chose: string }>;
 }
 
 function textOf(content: unknown): string {
@@ -63,6 +71,45 @@ function textOf(content: unknown): string {
 	return content
 		.flatMap((block) => (block?.type === "text" && typeof block.text === "string" ? [block.text] : []))
 		.join("\n");
+}
+
+/**
+ * Apply the irreversible-question rail to a finished verdict.
+ *
+ * Two outcomes per guarded question: steer onto the cautious option (and say
+ * so), or refuse — an irreversible decision with no cautious option is exactly
+ * the case a human has to make.
+ */
+function applySafetyRail(
+	questionnaire: Questionnaire,
+	base: Pick<AutopilotResult, "judged" | "from" | "fallbackReason"> & { verdict: AutopilotVerdict },
+): AutopilotResult {
+	const refused: AutopilotResult["refused"] = [];
+	const guarded: AutopilotResult["guarded"] = [];
+
+	const recommendations: Recommendation[] = base.verdict.recommendations.map((recommendation) => {
+		const question = questionnaire.questions[recommendation.questionIndex];
+		if (question === undefined) return recommendation;
+		const override = guardChoice(question, recommendation.selected);
+		if (override === undefined) return recommendation;
+		if (override === null) {
+			refused.push({ questionIndex: recommendation.questionIndex, header: question.header });
+			return recommendation;
+		}
+		guarded.push({ questionIndex: recommendation.questionIndex, header: question.header, chose: override });
+		return {
+			...recommendation,
+			selected: [override],
+			reason: `${recommendation.reason} — steered to the cautious option (this decision cannot be undone)`,
+		};
+	});
+
+	return {
+		...base,
+		verdict: { ...base.verdict, recommendations },
+		refused,
+		guarded,
+	};
 }
 
 /** Decide every question without a human. Never rejects, never returns nothing. */
@@ -75,21 +122,21 @@ export async function runAutopilot(
 
 	// Nothing to ask a judge: the common case, and it costs nothing.
 	if (needed.length === 0) {
-		return {
+		return applySafetyRail(questionnaire, {
 			verdict: composeVerdict(questionnaire, undefined, needed),
 			judged: true,
 			from: "recommendation",
-		};
+		});
 	}
 
 	const model = deps.resolveModel?.();
 	if (model === undefined || model === null) {
-		return {
+		return applySafetyRail(questionnaire, {
 			verdict: composeVerdict(questionnaire, undefined, needed),
 			judged: false,
 			from: "fallback",
 			fallbackReason: "no model available",
-		};
+		});
 	}
 
 	// The judge sees only the questions it must actually decide.
@@ -114,12 +161,12 @@ export async function runAutopilot(
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		deps.log?.(`[pi-decide] autopilot judge call failed: ${message}`);
-		return {
+		return applySafetyRail(questionnaire, {
 			verdict: composeVerdict(questionnaire, undefined, needed),
 			judged: false,
 			from: "fallback",
 			fallbackReason: message,
-		};
+		});
 	} finally {
 		clearTimeout(timer);
 		deps.signal?.removeEventListener("abort", onAbort);
@@ -128,27 +175,31 @@ export async function runAutopilot(
 	if (response.stopReason !== "stop" && response.stopReason !== undefined) {
 		const reason = response.errorMessage ?? `stopReason=${response.stopReason}`;
 		deps.log?.(`[pi-decide] autopilot judge did not complete: ${reason}`);
-		return {
+		return applySafetyRail(questionnaire, {
 			verdict: composeVerdict(questionnaire, undefined, needed),
 			judged: false,
 			from: "fallback",
 			fallbackReason: reason,
-		};
+		});
 	}
 
 	const raw = textOf(response.content);
 	const parsed = parseVerdict(raw, subset);
 	if (!parsed.ok) {
 		deps.log?.(`[pi-decide] autopilot judge output ${parsed.error}: ${raw.slice(0, 400)}`);
-		return {
+		return applySafetyRail(questionnaire, {
 			verdict: composeVerdict(questionnaire, undefined, needed),
 			judged: false,
 			from: "fallback",
 			fallbackReason: parsed.error,
-		};
+		});
 	}
 
-	return { verdict: composeVerdict(questionnaire, parsed.verdict, needed), judged: true, from: "judge" };
+	return applySafetyRail(questionnaire, {
+		verdict: composeVerdict(questionnaire, parsed.verdict, needed),
+		judged: true,
+		from: "judge",
+	});
 }
 
 /** Re-exported so callers can build a wholly-fallback verdict without a judge. */

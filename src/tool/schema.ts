@@ -70,6 +70,12 @@ export const QuestionSchema = Type.Object({
 			description: "One clause on why that option is best. Shows next to the recommendation.",
 		}),
 	),
+	irreversible: Type.Optional(
+		Type.Boolean({
+			description:
+				"Set true when the choice cannot be undone (deleting data, force-pushing, spending money, publishing). The autopilot then only takes the cautious option, and refuses to answer if no option is cautious. Wording that already reads as irreversible is detected automatically — set this only when that scan would miss it.",
+		}),
+	),
 });
 
 export const QuestionnaireSchema = Type.Object({

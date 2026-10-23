@@ -140,6 +140,7 @@ function build(raw: Questionnaire, limits: Limits): ValidationOk {
 			...(recommended !== undefined && question.recommendedBecause !== undefined
 				? { recommendedBecause: question.recommendedBecause.trim() }
 				: {}),
+			...(question.irreversible === true ? { irreversible: true } : {}),
 		});
 	});
 

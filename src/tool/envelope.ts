@@ -70,6 +70,14 @@ export function formatResult(result: DecisionResult, questionnaire: Questionnair
 				"The user cancelled the questionnaire. These questions were NOT answered — do not treat the cancellation as agreement, and do not re-ask the same questions immediately. Either proceed with a reasonable default (say which) or stop and explain what you need.",
 			);
 			break;
+		case "refused":
+			header.push(
+				`The autopilot REFUSED to answer: ${result.reason ?? "an irreversible decision needs a human"}.`,
+			);
+			header.push(
+				"These questions involve something that cannot be undone and offer no cautious option, so nobody was willing to decide on the user's behalf. Do NOT pick one yourself and do NOT proceed as if it were answered. Stop this line of work, finish whatever is safe to finish, and report clearly that this decision is blocked on the user.",
+			);
+			break;
 		case "rejected":
 			header.push(
 				`The questionnaire was rejected before it was shown: ${result.reason ?? "no reason given"}. Nothing was asked, so do not treat this as an answer.`,
@@ -88,6 +96,14 @@ export function formatResult(result: DecisionResult, questionnaire: Questionnair
 	}
 	if (result.unanswered.length > 0) {
 		lines.push("", `Unanswered: ${result.unanswered.join(", ")}`);
+	}
+	if (result.guarded !== undefined && result.guarded.length > 0) {
+		lines.push(
+			"",
+			`Safety rail: ${result.guarded
+				.map((item) => `${item.header} was steered to the cautious option "${item.chose}"`)
+				.join("; ")} (these decisions cannot be undone).`,
+		);
 	}
 	if (result.globalNote !== undefined && result.globalNote.length > 0) {
 		lines.push("", `Global note: ${result.globalNote}`);
