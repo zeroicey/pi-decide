@@ -1,0 +1,209 @@
+# pi-decide
+
+A [Pi](https://pi.dev) extension that lets the agent ask you structured
+questions — **and answers them itself when you are not there.**
+
+Two halves, one tool:
+
+- **Ask.** `ask_user_question` opens a tabbed terminal dialog: up to 8
+  questions, 2–8 written-out options each with a description, an optional
+  markdown preview beside the list, a free-text row, per-question notes, and a
+  Submit tab that reviews everything before it goes back.
+- **Decide.** When nobody answers — you are asleep, the run is headless, or the
+  session policy says so — a model picks the best option for each question, says
+  why, and the answer comes back to the agent **labelled as an autopilot
+  decision**, never as your approval.
+
+```bash
+pi install npm:pi-decide
+```
+
+Then `/reload` if Pi is already running.
+
+> ⚠️ `pi-decide` registers the tool name `ask_user_question`, which is also used
+> by `@juicesharp/rpiv-ask-user-question`. Run one or the other: two extensions
+> registering the same tool name will fight over the active tool list.
+
+---
+
+## Why the autopilot exists
+
+A coding agent that asks a good question is more useful than one that guesses. A
+coding agent that asks a question and then *blocks forever* because the human
+went to sleep is worse than either.
+
+Interruptions only pay off when someone is actually there to take them. So
+`pi-decide` splits "should I ask?" from "who answers?":
+
+| Mode | Behaviour | Use when |
+| --- | --- | --- |
+| `off` *(default)* | Always ask, always wait. Nothing changes from a plain questionnaire. | You are at the desk. |
+| `on` | Never ask. The model answers every questionnaire itself. | Long unattended runs, cron, CI. |
+| `auto` | Open the dialog, but count down. No keypress within N seconds → the model answers. | "I'll be here for a while, but not for all of it." |
+
+Switch per session:
+
+```text
+/decide status        # what is in effect, and why
+/decide on            # never ask (this session)
+/decide auto 180      # ask, self-answer after 180s
+/decide off           # always ask
+/decide reset         # back to the config file
+```
+
+The footer shows `🤖 auto` or `🤖 auto:180s` while a non-default policy is
+active (`*` marks a session override).
+
+### Precedence, and why it is asymmetric
+
+```
+no interactive UI (headless json/print)   →  autopilot, always
+per-call `mode: "ask"`                    →  always wait   (except over `on`)
+per-call `mode: "auto"`                   →  autopilot      (except over `off`)
+session override (`/decide …`)            →  wins over the config file
+config file `autopilot.mode`              →  the default
+```
+
+Three deliberate consequences:
+
+1. **Headless mode can never block.** There is no terminal to answer in, so the
+   only alternatives are "autopilot answers" and "the run hangs".
+2. **A model cannot escalate itself into a blocking dialog.** `mode: "auto"` is
+   ignored when the policy is `off` — you said you want to be asked, and only
+   you can lift that.
+3. **A model cannot silence a question either.** `mode: "ask"` always waits,
+   even under a session override of `auto`/`on`, unless the session policy is
+   `on` (which is your explicit "never ask me").
+
+## What the model sees back
+
+The answer envelope is written so an unattended decision cannot be mistaken for
+consent:
+
+```
+These answers were chosen by the autopilot, not by the user: nobody was available.
+The user did not see these questions and did not confirm these choices. Proceed on
+your own judgement; if the choice turns out to be unrecoverable, say so plainly in
+your final report instead of silently assuming it was approved.
+
+Answers:
+- Cache: "TTL 5m" [autopilot]
+- Scope: "Session store only" plus: unless writes are hot [autopilot]
+      user note: ask me later
+```
+
+A cancel is equally explicit: *"do not treat the cancellation as agreement, and
+do not re-ask the same questions immediately."*
+
+## How the autopilot decides
+
+1. **The model's own recommendation wins.** `recommended` (plus
+   `recommendedBecause`) is what the calling agent thinks is best. The judge
+   uses it as the default and only overrides it when the conversation clearly
+   says otherwise.
+2. **Otherwise a judge model reads the transcript.** A bounded excerpt of the
+   recent conversation plus the full question set goes to one non-streaming
+   completion. It returns every answer as JSON with a one-line reason.
+3. **Every failure still produces an answer.** A broken judge, an unreadable
+   reply, an expiry, a timeout — all of them fall back to the stated
+   recommendation (or the first option). The one outcome this feature exists to
+   prevent is a run that waits forever.
+
+The judge never runs on the render path, so a slow model cannot freeze the
+dialog, and the countdown keeps ticking while it thinks.
+
+## Configuration
+
+`~/.pi/agent/pi-decide.json`. Every field is optional; a missing or invalid
+value silently falls back to its default, because a typo must never be able to
+wedge the tool.
+
+```json
+{
+  "enabled": true,
+  "autopilot": { "mode": "off", "timeoutSeconds": 180 },
+  "ui": { "bell": true },
+  "judge": {
+    "model": null,
+    "tailMessages": 10,
+    "maxTailChars": 8000,
+    "timeoutMs": 90000
+  },
+  "limits": { "maxQuestions": 8, "maxOptions": 8 },
+  "notify": true,
+  "debug": false
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Master switch. When false the tool refuses every call. |
+| `autopilot.mode` | `"off"` | `off` / `on` / `auto`. |
+| `autopilot.timeoutSeconds` | `180` | Countdown for `auto`. `0` disables it (wait forever). |
+| `ui.bell` | `true` | Terminal BEL when the dialog starts waiting (TUI only). |
+| `judge.model` | `null` | `null` uses the session model. Pin `{"provider":"…","model":"…"}` to decouple the judge from whatever model the run uses. |
+| `judge.tailMessages` | `10` | Trailing messages the judge sees. |
+| `judge.maxTailChars` | `8000` | Hard cap on the excerpt. |
+| `judge.timeoutMs` | `90000` | Abort the judge after this long. |
+| `limits.maxQuestions` | `8` | Per-invocation ceiling. |
+| `limits.maxOptions` | `8` | Per-question ceiling. |
+| `notify` | `true` | Show a notification when the autopilot answers. |
+| `debug` | `false` | Log validation warnings and judge failures to stderr. |
+
+The file is re-read on every call, so edits apply without a reload.
+
+### Pinning the judge model
+
+By default the judge is the session's model. That is zero-config, but it couples
+the judge to the run: if a key expires or the provider goes down, the
+questionnaire cannot be answered either. Point `judge.model` at a cheap model on
+a different provider to remove that coupling.
+
+## Keys
+
+| Key | Action |
+| --- | --- |
+| `↑` `↓` | Move the highlight |
+| `Enter` | Pick the option / open the focused row |
+| `Space` | Toggle a checkbox on a `multiSelect` question |
+| `Tab` / `←` `→` | Move between questions (and the Submit tab) |
+| `n` | Note on this answer; on the Submit tab, one global note |
+| `Shift+Enter` | Newline inside a note or free-text answer |
+| `Esc` | Back out of the editor; cancel the whole questionnaire |
+| `Ctrl+]` | Collapse the dialog to one line, then restore it |
+
+`Type something.` is always the last row of a question and replaces the selected
+option — you cannot end up with "LRU" *and* an unrelated sentence. In
+`multiSelect` mode, a typed answer is exclusive on purpose: a mix would be
+ambiguous, and a free-text answer that silently kept checkboxes is worse than
+asking twice.
+
+## Running unattended
+
+The intended pattern:
+
+```bash
+# Start a long run, then walk away.
+/decide auto 120
+```
+
+The first questionnaire you miss waits two minutes, then the autopilot answers,
+the footer notifies you, and the run keeps moving. Ask for
+`"recommended": "<label>"` from your own prompts and the quality of those
+decisions tracks the quality of your recommendations.
+
+## Related
+
+- The autopilot is the companion of [`pi-unstall`](https://github.com/zeroicey/pi-unstall):
+  that one notices when a run *stopped*, this one notices when a run is *waiting*.
+- `@juicesharp/rpiv-ask-user-question` is the extension this one is modelled on.
+  It does the dialog well; it has no answer for "nobody is home".
+
+## Requirements
+
+- Node.js 22 or newer.
+- Pi Agent 1.3 or newer.
+
+## License
+
+MIT
