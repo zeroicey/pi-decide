@@ -218,6 +218,25 @@ decisions tracks the quality of your recommendations.
 - `@juicesharp/rpiv-ask-user-question` is the extension this one is modelled on.
   It does the dialog well; it has no answer for "nobody is home".
 
+## Verified behaviour
+
+Every claim below was exercised against a real Pi process, not only in unit tests.
+
+| Case | Result |
+| --- | --- |
+| Headless (`-p`), policy `on` | autopilot answers, envelope labelled `[autopilot]` |
+| Six consecutive calls in one run | 6/6 answered, none hung |
+| Explicit `mode: "ask"` in a headless run | overridden to autopilot — **cannot hang**, and the model is told so |
+| Judge model pinned to a name that does not exist | loud warning, falls back to the stated recommendation |
+| Judge overruns `judge.timeoutMs` | aborted, falls back, run continues |
+| Runtime `limits.maxQuestions` below the model's request | rejected with the exact count, nothing shown |
+| `recommended: "Drop it"` on a question whose description says `rm -rf` | steered to "Back up first", envelope says so |
+| Irreversible question with no cautious option | **refused**; the model is told to stop and report it blocked |
+| `off` policy, real TUI dialog | tabs, stars, notes, free text and the Submit review page all behave as documented |
+| `auto 6`, nobody touching the keyboard | self-answered after 6s, envelope says `[timeout, after 6s]` |
+| Keys arriving after the dialog settled | ignored without throwing |
+| Widths 0–140 columns, CJK / emoji / ZWJ / BiDi / ANSI in a preview | no over-wide line, no throw |
+
 ## Requirements
 
 - Node.js 22 or newer.
