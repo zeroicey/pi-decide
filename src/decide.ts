@@ -114,16 +114,72 @@ export function matchOption(question: Question, raw: string): string | undefined
 	if (wanted.length === 0) return undefined;
 	const exact = question.options.find((option) => normalizeLabel(option.label) === wanted);
 	if (exact) return exact.label;
+	// Prefix only. A `contains` tier can silently resolve to a *different* option
+	// than the judge named ("No cache" sits inside "No cache with TTL 5m"), and a
+	// silently wrong answer is worse than falling back to the stated
+	// recommendation.
 	const prefix = question.options.find((option) => {
 		const label = normalizeLabel(option.label);
 		return label.startsWith(wanted) || wanted.startsWith(label);
 	});
-	if (prefix) return prefix.label;
-	const contains = question.options.find((option) => {
-		const label = normalizeLabel(option.label);
-		return label.includes(wanted) || wanted.includes(label);
+	return prefix?.label;
+}
+
+/**
+ * Answer straight from the calling model's own recommendations.
+ *
+ * This is the strong path, not a fallback. The model that wrote the
+ * questionnaire just did the work and knows the task better than any judge
+ * reading a truncated transcript; when it marks an option, that is the answer.
+ */
+export function hasRecommendation(question: Question): boolean {
+	return (
+		question.recommended !== undefined &&
+		question.options.some((option) => option.label === question.recommended)
+	);
+}
+
+/** Indices of the questions that genuinely need a judge. */
+export function questionsNeedingJudge(questionnaire: Questionnaire): number[] {
+	return questionnaire.questions.map((_, index) => index).filter((index) => {
+		const question = questionnaire.questions[index];
+		return question !== undefined && !hasRecommendation(question);
 	});
-	return contains?.label;
+}
+
+/**
+ * Merge the two sources into one verdict.
+ *
+ * Per question, not all-or-nothing: a stated recommendation is *never*
+ * overridden by the judge (the judge is the same blocked model with less
+ * context, so it can only add error). `judged` is indexed against `needed`; its
+ * `questionIndex` values are subset positions and are remapped back here.
+ */
+export function composeVerdict(
+	questionnaire: Questionnaire,
+	judged: AutopilotVerdict | undefined,
+	needed: readonly number[],
+): AutopilotVerdict {
+	const recommendations: Recommendation[] = questionnaire.questions.map((question, index) => {
+		if (hasRecommendation(question)) {
+			return fallbackRecommendation(question, index, "stated with the question");
+		}
+		const position = needed.indexOf(index);
+		const fromJudge =
+			position === -1 ? undefined : judged?.recommendations.find((item) => item.questionIndex === position);
+		return fromJudge !== undefined
+			? { ...fromJudge, questionIndex: index }
+			: fallbackRecommendation(question, index, "no recommendation and no judge verdict");
+	});
+	const judgedCount = recommendations.length - questionnaire.questions.filter(hasRecommendation).length;
+	return {
+		recommendations,
+		summary:
+			judged?.summary ??
+			(judgedCount === 0
+				? "answered from the recommendations stated with the questions"
+				: "answered without a stated recommendation"),
+	};
 }
 
 export type ParseOutcome =

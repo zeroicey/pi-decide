@@ -1,0 +1,37 @@
+import { parseVerdict, matchOption, fallbackVerdict, synthesizeAnswers } from "../src/decide.ts";
+import { validateQuestionnaire } from "../src/tool/validate.ts";
+import { defaultConfig } from "../src/config.ts";
+const limits = defaultConfig().limits;
+const q1 = { header: "Cache", question: "Which?", options: [{ label: "LRU", description: "d" }, { label: "TTL 5m", description: "d" }, { label: "No cache", description: "d" }] };
+const one = { questions: [q1] };
+const show = (name: string, raw: string, q: any = one) => {
+  let out: string;
+  try { out = JSON.stringify(parseVerdict(raw, q as never)); } catch (e) { out = "THREW " + (e as Error).message; }
+  console.log(name, "=>", out.slice(0, 240));
+};
+show("recs not array", JSON.stringify({ summary: "s", recommendations: "nope" }));
+show("recs object", JSON.stringify({ summary: "s", recommendations: { "1": { selected: ["LRU"] } } }));
+show("entry null", '{"recommendations":[null]}');
+show("entry number", '{"recommendations":[3]}');
+show("entry string", '{"recommendations":["LRU"]}');
+show("q 0", JSON.stringify({ recommendations: [{ question: 0, selected: ["LRU"], reason: "r" }] }));
+show("q -1", JSON.stringify({ recommendations: [{ question: -1, selected: ["LRU"], reason: "r" }] }));
+show("q 99", JSON.stringify({ recommendations: [{ question: 99, selected: ["LRU"], reason: "r" }] }));
+show("q 1.7", JSON.stringify({ recommendations: [{ question: 1.7, selected: ["TTL 5m"], reason: "r" }] }));
+show("q 'Q1'", JSON.stringify({ recommendations: [{ question: "Q1", selected: ["TTL 5m"], reason: "r" }] }));
+show("q 'two'", JSON.stringify({ recommendations: [{ question: "two", selected: ["TTL 5m"], reason: "r" }] }));
+show("dup q 1,1 later wins?", JSON.stringify({ recommendations: [{ question: 1, selected: ["LRU"], reason: "first" }, { question: 1, selected: ["TTL 5m"], reason: "second" }] }));
+show("nested selected", JSON.stringify({ recommendations: [{ question: 1, selected: [["LRU"]], reason: "r" }] }));
+show("text number", JSON.stringify({ recommendations: [{ question: 1, selected: [], text: 42, reason: "r" }] }));
+show("reason missing", JSON.stringify({ recommendations: [{ question: 1, selected: ["LRU"] }] }));
+show("reason number", JSON.stringify({ recommendations: [{ question: 1, selected: ["LRU"], reason: 7 }] }));
+show("header diff case", JSON.stringify({ recommendations: [{ header: "CACHE", selected: ["LRU"], reason: "r" }] }));
+show("summary number", JSON.stringify({ recommendations: [{ question: 1, selected: ["LRU"], reason: "r" }], summary: 42 }));
+show("summary empty", JSON.stringify({ recommendations: [{ question: 1, selected: ["LRU"], reason: "r" }], summary: "   " }));
+show("multi 0 picks + text", JSON.stringify({ recommendations: [{ question: 1, selected: [], text: "use redis", reason: "r" }] }), { questions: [{ ...q1, multiSelect: true }] });
+show("single 0 picks but text", JSON.stringify({ recommendations: [{ question: 1, selected: ["LFU"], text: "redis", reason: "r" }] }));
+show("prototype pollution", '{"recommendations":[{"question":1,"selected":["__proto__"],"reason":"r"}],"summary":"__proto__"}');
+show("__proto__ entry", '{"__proto__":{"recommendations":[{"question":1,"selected":["LRU"]}]}}');
+show("two objects", '{"summary":"first","recommendations":[{"question":1,"selected":["LRU"],"reason":"r"}]} trailing {"summary":"second"}');
+show("braces in string", 'text {not json} {"summary":"s","recommendations":[{"question":1,"selected":["LRU"],"reason":"r"}]}');
+show("dup q 1 with string then num", '{"recommendations":[{"question":"1","selected":["LRU"],"reason":"a"},{"question":1,"selected":["TTL 5m"],"reason":"b"}]}');

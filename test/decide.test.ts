@@ -28,9 +28,14 @@ describe("matchOption", () => {
 		expect(matchOption(q, "ttl   5m")).toBe("TTL 5m");
 	});
 
-	test("matches on a prefix or a containing phrase", () => {
+	test("matches on a prefix", () => {
 		expect(matchOption(q, "No")).toBe("No cache");
-		expect(matchOption(q, "cache")).toBe("No cache");
+	});
+
+	test("refuses a bare substring, so it cannot pick the wrong option", () => {
+		// "cache" appears in "No cache" only as a substring. Guessing here is how a
+		// judge's "No cache with TTL 5m" would silently resolve to "No cache".
+		expect(matchOption(q, "cache")).toBeUndefined();
 	});
 
 	test("returns undefined for anything unmatched", () => {
