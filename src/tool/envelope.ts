@@ -87,7 +87,10 @@ export function formatResult(result: DecisionResult, questionnaire: Questionnair
 			break;
 	}
 
-	const answered = result.answers.filter((answer) => answer.source !== "abandoned");
+	const refusedHeaders = new Set(result.refused?.map((item) => item.header) ?? []);
+	const answered = result.answers.filter(
+		(answer) => answer.source !== "abandoned" && !refusedHeaders.has(answer.header),
+	);
 	const lines = [...header];
 	if (lines.length > 0) lines.push("");
 	if (answered.length > 0) {

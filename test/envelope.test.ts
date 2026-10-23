@@ -103,3 +103,54 @@ describe("buildResult", () => {
 		expect(built.isError).toBe(true);
 	});
 });
+
+describe("refused questions", () => {
+	test("are not listed as answers, because they were not answered", () => {
+		const text = formatResult(
+			{
+				answers: [answer({ header: "Key", selected: ["Rotate immediately"], source: "autopilot" })],
+				outcome: "refused",
+				reason: "an irreversible decision with no cautious option needs a human (Key)",
+				unanswered: ["Key"],
+				refused: [{ questionIndex: 0, header: "Key" }],
+			},
+			q,
+		);
+		expect(text).toContain("REFUSED");
+		expect(text).toContain("do NOT proceed as if it were answered");
+		// The autopilot's own fallback pick must not appear as if it were an answer.
+		expect(text).not.toContain('"Rotate immediately"');
+		expect(text).toContain("Unanswered: Key");
+	});
+
+	test("a refusal still reports answers for the questions that were safe", () => {
+		const two = questionnaire(question({ header: "Cache" }), question({ header: "Key" }));
+		const text = formatResult(
+			{
+				answers: [
+					answer({ index: 0, header: "Cache", selected: ["LRU"], source: "autopilot" }),
+					answer({ index: 1, header: "Key", selected: ["Rotate immediately"], source: "autopilot" }),
+				],
+				outcome: "refused",
+				unanswered: ["Key"],
+				refused: [{ questionIndex: 1, header: "Key" }],
+			},
+			two,
+		);
+		expect(text).toContain('- Cache: "LRU" [autopilot]');
+		expect(text).not.toContain("Rotate immediately");
+	});
+
+	test("reports when the rail steered a choice", () => {
+		const text = formatResult(
+			{
+				answers: [answer({ selected: ["Back up first"], source: "autopilot" })],
+				outcome: "autopilot",
+				unanswered: [],
+				guarded: [{ questionIndex: 0, header: "Cache", chose: "Back up first" }],
+			},
+			q,
+		);
+		expect(text).toContain('steered to the cautious option "Back up first"');
+	});
+});
