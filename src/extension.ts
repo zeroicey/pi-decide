@@ -44,13 +44,6 @@ const PROMPT_GUIDELINES = [
 	"Check the result envelope: answers marked `[autopilot]` were not chosen by the user. State the assumption in your final report rather than implying it was approved.",
 ];
 
-/** Resolve the config from the agent directory, once per invocation so edits apply live. */
-function currentConfig(): DecideConfig {
-	const loaded = loadConfig(getAgentDir());
-	if (loaded.warning !== undefined) process.stderr.write(`[pi-decide] ${loaded.warning}\n`);
-	return loaded.config;
-}
-
 function hostKind(ctx: ExtensionContext): HostKind {
 	if (ctx.mode === "tui") return "tui";
 	if (ctx.mode === "rpc" && ctx.hasUI) return "rpc";
@@ -187,21 +180,40 @@ async function answerWithAutopilot(
 export default function piDecide(pi: ExtensionAPI): void {
 	/** Session-scoped override, set by `/decide off|on|auto`. Not persisted on purpose. */
 	let sessionMode: PolicyMode | undefined;
+	/** Session-scoped countdown override from `/decide … <seconds>`. */
+	let sessionTimeout: number | undefined;
 	let lastConfig = loadConfig(getAgentDir()).config;
+
+	/**
+	 * The effective config: the file, plus this session's overrides.
+	 *
+	 * Overrides live here rather than being written back to the file because
+	 * `/decide auto 8` is a statement about *this run*, not a permanent change —
+	 * but they must be merged here, or the tool's own re-read of the file would
+	 * silently discard them mid-session.
+	 */
+	const effectiveConfig = (): DecideConfig => {
+		const loaded = loadConfig(getAgentDir());
+		if (loaded.warning !== undefined) process.stderr.write(`[pi-decide] ${loaded.warning}\n`);
+		lastConfig = loaded.config;
+		if (sessionTimeout === undefined) return loaded.config;
+		return { ...loaded.config, autopilot: { ...loaded.config.autopilot, timeoutSeconds: sessionTimeout } };
+	};
 
 	const paintStatus = (ctx: ExtensionContext): void => {
 		if (ctx.mode !== "tui") return;
 		const mode = sessionMode ?? lastConfig.autopilot.mode;
+		const seconds = sessionTimeout ?? lastConfig.autopilot.timeoutSeconds;
 		ctx.ui.setStatus(
 			STATUS_KEY,
 			mode === "off"
 				? undefined
-				: `🤖 ${mode === "on" ? "auto" : `auto:${lastConfig.autopilot.timeoutSeconds}s`}${sessionMode !== undefined ? "*" : ""}`,
+				: `🤖 ${mode === "on" ? "auto" : `auto:${seconds}s`}${sessionMode !== undefined ? "*" : ""}`,
 		);
 	};
 
 	pi.on("session_start", (_event, ctx) => {
-		lastConfig = loadConfig(getAgentDir()).config;
+		effectiveConfig();
 		paintStatus(ctx);
 	});
 
@@ -212,19 +224,25 @@ export default function piDecide(pi: ExtensionAPI): void {
 	pi.registerCommand("decide", {
 		description:
 			"Autopilot policy for ask_user_question: /decide [off|on|auto|status] [seconds]. `on` never asks, `auto` asks then self-answers after N seconds.",
-		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			handler: async (args: string, ctx: ExtensionCommandContext) => {
 			const raw = args.trim();
 			const parts = raw.split(/\s+/).filter(Boolean);
 			const head = parts[0]?.toLowerCase();
-			lastConfig = loadConfig(getAgentDir()).config;
+			effectiveConfig();
 
 			if (head === "" || head === undefined || head === "status") {
-				const effective = resolvePolicy({ config: lastConfig, ...(sessionMode !== undefined ? { sessionMode } : {}), host: hostKind(ctx) });
+				const seconds = sessionTimeout ?? lastConfig.autopilot.timeoutSeconds;
+				const effective = resolvePolicy({
+					config: { ...lastConfig, autopilot: { ...lastConfig.autopilot, timeoutSeconds: seconds } },
+					...(sessionMode !== undefined ? { sessionMode } : {}),
+					host: hostKind(ctx),
+				});
 				ctx.ui.notify(
 					[
-						`ask_user_question: ${describePolicy(effective.mode, lastConfig.autopilot.timeoutSeconds)}`,
+						`ask_user_question: ${describePolicy(effective.mode, seconds)}`,
 						`config: ${lastConfig.autopilot.mode}, timeout ${lastConfig.autopilot.timeoutSeconds}s`,
 						sessionMode !== undefined ? `session override: ${sessionMode}` : "session override: none",
+						sessionTimeout !== undefined ? `session timeout: ${sessionTimeout}s` : "session timeout: none",
 						effective.why,
 					].join("\n"),
 					"info",
@@ -234,6 +252,7 @@ export default function piDecide(pi: ExtensionAPI): void {
 
 			if (head === "reset" || head === "clear") {
 				sessionMode = undefined;
+				sessionTimeout = undefined;
 				paintStatus(ctx);
 				ctx.ui.notify(`Autopilot back to the configured policy: ${lastConfig.autopilot.mode}`, "info");
 				return;
@@ -245,18 +264,20 @@ export default function piDecide(pi: ExtensionAPI): void {
 			}
 
 			sessionMode = head;
-			const seconds = parts[1] === undefined ? Number.NaN : Number.parseInt(parts[1], 10);
-			if (Number.isFinite(seconds) && seconds >= 0) {
-				lastConfig = { ...lastConfig, autopilot: { ...lastConfig.autopilot, timeoutSeconds: seconds } };
-			}
+			const parsed = parts[1] === undefined ? Number.NaN : Number.parseInt(parts[1], 10);
+			if (Number.isFinite(parsed) && parsed >= 0) sessionTimeout = parsed;
 			paintStatus(ctx);
+			const seconds = sessionTimeout ?? lastConfig.autopilot.timeoutSeconds;
 			const describe =
 				head === "off"
 					? "always ask the human"
 					: head === "on"
 						? "never ask — the model answers every questionnaire"
-						: `ask, then self-answer after ${lastConfig.autopilot.timeoutSeconds}s`;
-			ctx.ui.notify(`Autopilot for this session: ${describe}.${head === "off" ? "" : " (/decide reset to undo)"}`, "info");
+						: `ask, then self-answer after ${seconds}s`;
+			ctx.ui.notify(
+				`Autopilot for this session: ${describe}.${head === "off" ? "" : " (/decide reset to undo)"}`,
+				"info",
+			);
 		},
 	});
 
@@ -269,8 +290,7 @@ export default function piDecide(pi: ExtensionAPI): void {
 		parameters: QuestionnaireSchema,
 
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			const config = currentConfig();
-			lastConfig = config;
+			const config = effectiveConfig();
 			if (!config.enabled) {
 				return rejected(undefined, "pi-decide is disabled in the config file (enabled: false)");
 			}

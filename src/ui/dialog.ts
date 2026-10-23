@@ -177,14 +177,23 @@ export class QuestionnaireDialog {
 
 	private buildView(): ViewState {
 		return {
-			tabs: this.tabs.map((state) => ({
-				header: state.question.header,
-				...(state.question.category !== undefined ? { category: state.question.category } : {}),
-				question: state.question.question,
-				answered: this.isAnswered(state),
-				...(state.text !== undefined ? { text: state.text } : {}),
-				...(state.note !== undefined ? { note: state.note } : {}),
-			})),
+			tabs: this.tabs.map((state) => {
+				// Show what was actually chosen: a free-text answer as typed, otherwise
+				// the picked labels in authored order. "(selected)" tells the user
+				// nothing on the Submit tab.
+				const picked = state.question.options
+					.map((option) => option.label)
+					.filter((label) => state.selected.has(label));
+				const summary = state.text ?? (picked.length > 0 ? picked.join(", ") : undefined);
+				return {
+					header: state.question.header,
+					...(state.question.category !== undefined ? { category: state.question.category } : {}),
+					question: state.question.question,
+					answered: this.isAnswered(state),
+					...(summary !== undefined ? { text: summary } : {}),
+					...(state.note !== undefined ? { note: state.note } : {}),
+				};
+			}),
 			tab: this.tab,
 			options: this.rows(),
 			index: this.index,
