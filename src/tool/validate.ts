@@ -20,7 +20,9 @@ export type ValidationErrorName =
 	| "duplicate_label"
 	| "empty_description"
 	| "empty_header"
-	| "reserved_label";
+	| "reserved_label"
+	/** A field had the wrong type — the model sent junk rather than a bad questionnaire. */
+	| "malformed";
 
 export interface ValidationError {
 	ok: false;
@@ -163,10 +165,15 @@ export function validateQuestionnaire(raw: Questionnaire, limits: Limits): Valid
 		if (error instanceof Reject) {
 			return { ok: false, error: error.errorName, message: `Error: ${error.message}` };
 		}
+		// A thrown non-Reject is a type error deep inside normalization (a label
+		// that is not a string, an options array holding null). Reporting that as
+		// `no_questions` sent the model chasing the wrong fix, and echoing the raw
+		// TypeError told it nothing useful. Name the real problem instead.
+		const detail = error instanceof Error ? error.message : String(error);
 		return {
 			ok: false,
-			error: "no_questions",
-			message: `Error: invalid questionnaire — ${error instanceof Error ? error.message : String(error)}`,
+			error: "malformed",
+			message: `Error: the questionnaire arguments are malformed — every question needs a string header, and every option needs a string label and description. (${detail})`,
 		};
 	}
 }

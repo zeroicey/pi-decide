@@ -178,3 +178,36 @@ describe("validateQuestionnaire", () => {
 		}
 	});
 });
+
+describe("type-level junk", () => {
+	test("names the real problem instead of blaming an empty questionnaire", () => {
+		// A non-string label used to surface as `no_questions`, which sent the model
+		// chasing the wrong fix, and echoed a raw TypeError.
+		for (const broken of [
+			{ questions: [{ header: "h", options: [{ label: 42, description: "d" }, { label: "b", description: "d" }] }] },
+			{ questions: [{ header: "h", options: [{ label: {}, description: "d" }, { label: "b", description: "d" }] }] },
+			{ questions: [{ header: "h", options: [null, { label: "b", description: "d" }] }] },
+		]) {
+			const result = validateQuestionnaire(broken as never, limits);
+			expect(result.ok).toBe(false);
+			if (result.ok) return;
+			expect(result.error).toBe("malformed");
+			expect(result.message).toContain("string label");
+		}
+	});
+
+	test("rejects labels that differ only by whitespace", () => {
+		const result = validateQuestionnaire(
+			questionnaire(
+				question({
+					options: [
+						{ label: "a b", description: "d" },
+						{ label: "a  b", description: "d" },
+					],
+				}),
+			),
+			limits,
+		);
+		expect(result.ok).toBe(false);
+	});
+});

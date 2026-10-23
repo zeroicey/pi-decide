@@ -230,3 +230,29 @@ describe("prompt rendering", () => {
 		expect(body).toContain("TTL 5m");
 	});
 });
+
+describe("matchOption ambiguity", () => {
+	test("takes the longest prefix match, not the first one", () => {
+		// `.find` used to pick "No cache" here, because it is a prefix of the
+		// judge's text and sits first in the list. Silently choosing the wrong
+		// option is the failure mode this whole tier exists to avoid.
+		const q = question({
+			options: [
+				{ label: "No cache", description: "always hit the database" },
+				{ label: "No cache with TTL", description: "keep a short-lived copy" },
+			],
+		});
+		expect(matchOption(q, "No cache with TTL 5m")).toBe("No cache with TTL");
+		expect(matchOption(q, "No cache")).toBe("No cache");
+	});
+
+	test("still refuses a bare substring", () => {
+		const q = question({
+			options: [
+				{ label: "No cache", description: "a" },
+				{ label: "No cache with TTL", description: "b" },
+			],
+		});
+		expect(matchOption(q, "with TTL")).toBeUndefined();
+	});
+});

@@ -114,15 +114,21 @@ export function matchOption(question: Question, raw: string): string | undefined
 	if (wanted.length === 0) return undefined;
 	const exact = question.options.find((option) => normalizeLabel(option.label) === wanted);
 	if (exact) return exact.label;
-	// Prefix only. A `contains` tier can silently resolve to a *different* option
-	// than the judge named ("No cache" sits inside "No cache with TTL 5m"), and a
-	// silently wrong answer is worse than falling back to the stated
-	// recommendation.
-	const prefix = question.options.find((option) => {
+	// Prefix only — no `contains` tier, because a bare substring resolves to a
+	// *different* option ("cache" sits inside "No cache") and a silently wrong
+	// answer is worse than falling back to the stated recommendation.
+	//
+	// Longest match wins. `.find` alone would pick "No cache" when the judge
+	// wrote "No cache with TTL 5m", since "No cache" is a prefix of the input and
+	// is tested first. Longer labels are strictly more specific, so taking the
+	// longest removes that ambiguity.
+	let best: { label: string; length: number } | undefined;
+	for (const option of question.options) {
 		const label = normalizeLabel(option.label);
-		return label.startsWith(wanted) || wanted.startsWith(label);
-	});
-	return prefix?.label;
+		if (!(label.startsWith(wanted) || wanted.startsWith(label))) continue;
+		if (best === undefined || label.length > best.length) best = { label: option.label, length: label.length };
+	}
+	return best?.label;
 }
 
 /**
