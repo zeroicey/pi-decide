@@ -27,7 +27,6 @@
 	"main": "./src/index.ts",
 	"exports": {
 		".": "./src/index.ts",
-		"./events": "./src/events.ts",
 		"./package.json": "./package.json"
 	},
 	"files": [

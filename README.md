@@ -168,7 +168,6 @@ a different provider to remove that coupling.
 | `Space` | Toggle a checkbox on a `multiSelect` question |
 | `Tab` / `←` `→` | Move between questions (and the Submit tab) |
 | `n` | Note on this answer; on the Submit tab, one global note |
-| `Shift+Enter` | Newline inside a note or free-text answer |
 | `Esc` | Back out of the editor; cancel the whole questionnaire |
 | `Ctrl+]` | Collapse the dialog to one line, then restore it |
 
