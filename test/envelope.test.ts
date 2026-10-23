@@ -45,7 +45,7 @@ describe("formatResult", () => {
 			}),
 			q,
 		);
-		expect(text).toContain("waited no answer within 180s with no human input");
+		expect(text).toContain("Nobody answered the dialog (no answer within 180s)");
 		expect(text).toContain("[timeout, after 180s]");
 	});
 

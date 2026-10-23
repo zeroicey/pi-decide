@@ -37,17 +37,35 @@ Interruptions only pay off when someone is actually there to take them. So
 
 | Mode | Behaviour | Use when |
 | --- | --- | --- |
-| `off` *(default)* | Always ask, always wait. Nothing changes from a plain questionnaire. | You are at the desk. |
+| `off` *(default)* | Ask, and wait — **but not forever**. If nobody answers within `deadlineSeconds` (15 min by default), the autopilot answers. Because asking is not a promise that a human is still there. | You are at the desk. |
 | `on` | Never ask. The model answers every questionnaire itself. | Long unattended runs, cron, CI. |
 | `auto` | Open the dialog, but count down. No keypress within N seconds → the model answers. | "I'll be here for a while, but not for all of it." |
+
+**The one guarantee that holds in every mode: a run never waits forever.** That
+is a system invariant rather than a policy outcome — which is why even `off` has
+a safety net. `off` means *"prefer to ask me"*, not *"wait for me indefinitely"*:
+a run that waits indefinitely for someone who went to sleep is exactly the bug
+this extension exists to fix.
+
+If you genuinely want a dialog that waits until you come back, say so
+explicitly:
+
+```text
+/decide hold          # this session: ask and wait forever, no safety net
+/decide deadline 0    # same thing, expressed as config
+```
+
+`hold` is deliberately awkward to reach and warns when you use it.
 
 Switch per session:
 
 ```text
 /decide status        # what is in effect, and why
-/decide on            # never ask (this session)
+/decide off           # ask (still capped by the 15 min safety net)
 /decide auto 180      # ask, self-answer after 180s
-/decide off           # always ask
+/decide on            # never ask (this session)
+/decide deadline 60   # tune the safety net only
+/decide hold          # ask and wait forever (removes the safety net)
 /decide reset         # back to the config file
 ```
 
@@ -58,11 +76,15 @@ active (`*` marks a session override).
 
 ```
 no interactive UI (headless json/print)   →  autopilot, always
-per-call `mode: "ask"`                    →  always wait   (except over `on`)
+per-call `mode: "ask"`                    →  always ask    (except over `on`)
 per-call `mode: "auto"`                   →  autopilot      (except over `off`)
 session override (`/decide …`)            →  wins over the config file
 config file `autopilot.mode`              →  the default
 ```
+
+...and on top of all of that, **whatever asks also counts down**: `auto` uses
+its own delay, `off` uses `deadlineSeconds`. Only `hold` / `deadlineSeconds: 0`
+removes the net, and it says so in the footer (`🤖 hold`).
 
 Three deliberate consequences:
 
@@ -141,7 +163,7 @@ wedge the tool.
 ```json
 {
   "enabled": true,
-  "autopilot": { "mode": "off", "timeoutSeconds": 180 },
+  "autopilot": { "mode": "off", "timeoutSeconds": 180, "deadlineSeconds": 900 },
   "ui": { "bell": true },
   "judge": {
     "model": null,
@@ -159,7 +181,8 @@ wedge the tool.
 | --- | --- | --- |
 | `enabled` | `true` | Master switch. When false the tool refuses every call. |
 | `autopilot.mode` | `"off"` | `off` / `on` / `auto`. |
-| `autopilot.timeoutSeconds` | `180` | Countdown for `auto`. `0` disables it (wait forever). |
+| `autopilot.timeoutSeconds` | `180` | Countdown for `auto`. `0` means `auto` behaves like `off` (waits until the deadline). |
+| `autopilot.deadlineSeconds` | `900` | Safety net for `off`: after this long with no input the autopilot answers. **`0` disables it, which is the only way a run can hang.** |
 | `ui.bell` | `true` | Terminal BEL when the dialog starts waiting (TUI only). |
 | `judge.model` | `null` | `null` uses the session model. Pin `{"provider":"…","model":"…"}` to decouple the judge from whatever model the run uses. A pinned model that does not resolve now warns loudly instead of degrading silently. |
 | `judge.tailMessages` | `10` | Trailing messages the judge sees. |
@@ -233,6 +256,7 @@ Every claim below was exercised against a real Pi process, not only in unit test
 | `recommended: "Drop it"` on a question whose description says `rm -rf` | steered to "Back up first", envelope says so |
 | Irreversible question with no cautious option | **refused**; the model is told to stop and report it blocked |
 | `off` policy, real TUI dialog | tabs, stars, notes, free text and the Submit review page all behave as documented |
+| `off` policy, nobody answers | the 15 min safety net fires and the envelope says so |
 | `auto 6`, nobody touching the keyboard | self-answered after 6s, envelope says `[timeout, after 6s]` |
 | Keys arriving after the dialog settled | ignored without throwing |
 | Widths 0–140 columns, CJK / emoji / ZWJ / BiDi / ANSI in a preview | no over-wide line, no throw |

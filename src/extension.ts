@@ -15,7 +15,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Message } from "@earendil-works/pi-ai";
 import { runAutopilot } from "./autopilot.ts";
-import { describePolicy, resolvePolicy, type HostKind } from "./policy.ts";
+import { describePolicy, resolvePolicy, statusBadge, type HostKind } from "./policy.ts";
 import { loadConfig, type DecideConfig } from "./config.ts";
 import { synthesizeAnswers } from "./decide.ts";
 import { buildTranscript } from "./transcript.ts";
@@ -90,12 +90,18 @@ function fromDialog(questionnaire: Questionnaire, outcome: Extract<DialogOutcome
 }
 
 /** Show the dialog and wait. Resolves with the dialog's outcome, never throws. */
-function showDialog(ctx: ExtensionContext, questionnaire: Questionnaire, timeoutSeconds: number, hint?: string): Promise<DialogOutcome> {
+function showDialog(
+	ctx: ExtensionContext,
+	questionnaire: Questionnaire,
+	timeoutSeconds: number,
+	options: { hint?: string; deadlineKind?: "auto" | "deadline" } = {},
+): Promise<DialogOutcome> {
 	return ctx.ui.custom<DialogOutcome>((tui, theme, keybindings, done) => {
 		const dialog = new QuestionnaireDialog({
 			questionnaire,
 			...(timeoutSeconds > 0 ? { timeoutSeconds } : {}),
-			...(hint !== undefined ? { autopilotHint: hint } : {}),
+			...(options.hint !== undefined ? { autopilotHint: options.hint } : {}),
+			...(options.deadlineKind !== undefined ? { deadlineKind: options.deadlineKind } : {}),
 			tui,
 			theme,
 			keybindings,
@@ -207,6 +213,8 @@ export default function piDecide(pi: ExtensionAPI): void {
 	let sessionMode: PolicyMode | undefined;
 	/** Session-scoped countdown override from `/decide … <seconds>`. */
 	let sessionTimeout: number | undefined;
+	/** Session-scoped deadline override from `/decide hold` / `/decide deadline N`. */
+	let sessionDeadline: number | undefined;
 	let lastConfig = loadConfig(getAgentDir()).config;
 
 	/**
@@ -221,20 +229,27 @@ export default function piDecide(pi: ExtensionAPI): void {
 		const loaded = loadConfig(getAgentDir());
 		if (loaded.warning !== undefined) process.stderr.write(`[pi-decide] ${loaded.warning}\n`);
 		lastConfig = loaded.config;
-		if (sessionTimeout === undefined) return loaded.config;
-		return { ...loaded.config, autopilot: { ...loaded.config.autopilot, timeoutSeconds: sessionTimeout } };
+		if (sessionTimeout === undefined && sessionDeadline === undefined) return loaded.config;
+		return {
+			...loaded.config,
+			autopilot: {
+				...loaded.config.autopilot,
+				...(sessionTimeout !== undefined ? { timeoutSeconds: sessionTimeout } : {}),
+				...(sessionDeadline !== undefined ? { deadlineSeconds: sessionDeadline } : {}),
+			},
+		};
 	};
 
 	const paintStatus = (ctx: ExtensionContext): void => {
 		if (ctx.mode !== "tui") return;
-		const mode = sessionMode ?? lastConfig.autopilot.mode;
-		const seconds = sessionTimeout ?? lastConfig.autopilot.timeoutSeconds;
-		ctx.ui.setStatus(
-			STATUS_KEY,
-			mode === "off"
-				? undefined
-				: `🤖 ${mode === "on" ? "auto" : `auto:${seconds}s`}${sessionMode !== undefined ? "*" : ""}`,
-		);
+		const config = effectiveConfig();
+		const resolved = resolvePolicy({
+			config,
+			...(sessionMode !== undefined ? { sessionMode } : {}),
+			...(sessionDeadline !== undefined ? { sessionDeadline } : {}),
+			host: hostKind(ctx),
+		});
+		ctx.ui.setStatus(STATUS_KEY, statusBadge(resolved.mode, resolved.policy.timeoutSeconds, sessionMode !== undefined));
 	};
 
 	pi.on("session_start", (_event, ctx) => {
@@ -248,27 +263,32 @@ export default function piDecide(pi: ExtensionAPI): void {
 
 	pi.registerCommand("decide", {
 		description:
-			"Autopilot policy for ask_user_question: /decide [off|on|auto|status] [seconds]. `on` never asks, `auto` asks then self-answers after N seconds.",
-			handler: async (args: string, ctx: ExtensionCommandContext) => {
-			const raw = args.trim();
-			const parts = raw.split(/\s+/).filter(Boolean);
-			const head = parts[0]?.toLowerCase();
-			effectiveConfig();
+			"Autopilot policy for ask_user_question. /decide [off|on|auto|hold|status|reset] [seconds] — `off` asks but is still capped by the deadline, `auto N` asks and self-answers after N seconds, `on` never asks, `hold` waits forever (removes the safety net).",
+		handler: async (args: string, ctx: ExtensionCommandContext) => {
+			const parts = args.trim().split(/\s+/).filter(Boolean);
+			const head = (parts[0] ?? "").toLowerCase();
+			const config = effectiveConfig();
+			const secondsArg = parts[1] === undefined ? Number.NaN : Number.parseInt(parts[1], 10);
+			const hasSeconds = Number.isFinite(secondsArg) && secondsArg >= 0;
 
-			if (head === "" || head === undefined || head === "status") {
-				const seconds = sessionTimeout ?? lastConfig.autopilot.timeoutSeconds;
-				const effective = resolvePolicy({
-					config: { ...lastConfig, autopilot: { ...lastConfig.autopilot, timeoutSeconds: seconds } },
-					...(sessionMode !== undefined ? { sessionMode } : {}),
-					host: hostKind(ctx),
-				});
+			const resolved = resolvePolicy({
+				config,
+				...(sessionMode !== undefined ? { sessionMode } : {}),
+				...(sessionDeadline !== undefined ? { sessionDeadline } : {}),
+				host: hostKind(ctx),
+			});
+
+			if (head === "" || head === "status") {
 				ctx.ui.notify(
 					[
-						`ask_user_question: ${describePolicy(effective.mode, seconds)}`,
-						`config: ${lastConfig.autopilot.mode}, timeout ${lastConfig.autopilot.timeoutSeconds}s`,
-						sessionMode !== undefined ? `session override: ${sessionMode}` : "session override: none",
-						sessionTimeout !== undefined ? `session timeout: ${sessionTimeout}s` : "session timeout: none",
-						effective.why,
+						`ask_user_question: ${describePolicy(resolved.mode, resolved.policy.timeoutSeconds)}`,
+						`config: mode ${config.autopilot.mode} · auto ${config.autopilot.timeoutSeconds}s · deadline ${config.autopilot.deadlineSeconds}s (0 = none)`,
+						sessionMode !== undefined ? `session mode: ${sessionMode}` : "session mode: none",
+						sessionTimeout !== undefined ? `session auto delay: ${sessionTimeout}s` : "session auto delay: none",
+						sessionDeadline !== undefined
+							? `session deadline: ${sessionDeadline === 0 ? "disabled (waits forever)" : `${sessionDeadline}s`}`
+							: "session deadline: none",
+						resolved.why,
 					].join("\n"),
 					"info",
 				);
@@ -278,30 +298,70 @@ export default function piDecide(pi: ExtensionAPI): void {
 			if (head === "reset" || head === "clear") {
 				sessionMode = undefined;
 				sessionTimeout = undefined;
+				sessionDeadline = undefined;
 				paintStatus(ctx);
-				ctx.ui.notify(`Autopilot back to the configured policy: ${lastConfig.autopilot.mode}`, "info");
+				ctx.ui.notify(`Autopilot back to the configured policy: ${describePolicy(config.autopilot.mode, config.autopilot.timeoutSeconds)}`, "info");
+				return;
+			}
+
+			// `hold` is the explicit, non-default "I accept a run that can block".
+			if (head === "hold") {
+				sessionMode = "off";
+				sessionDeadline = 0;
+				paintStatus(ctx);
+				ctx.ui.notify(
+					"Autopilot held: this session asks and waits indefinitely. No safety net — the run can block until you answer. (/decide reset to undo)",
+					"warning",
+				);
+				return;
+			}
+
+			// `deadline N` tunes the safety net without changing the mode.
+			if (head === "deadline") {
+				if (!hasSeconds) {
+					ctx.ui.notify("Usage: /decide deadline <seconds> (0 disables the safety net)", "error");
+					return;
+				}
+				sessionDeadline = secondsArg;
+				paintStatus(ctx);
+				ctx.ui.notify(
+					secondsArg === 0
+						? "Safety net disabled: an `off` dialog now waits forever."
+						: `Safety net: an \`off\` dialog self-answers after ${secondsArg}s of no input.`,
+					secondsArg === 0 ? "warning" : "info",
+				);
 				return;
 			}
 
 			if (head !== "off" && head !== "on" && head !== "auto") {
-				ctx.ui.notify("Usage: /decide [off|on|auto|status|reset] [seconds]", "error");
+				ctx.ui.notify(
+					"Usage: /decide [off|on|auto|hold|deadline|status|reset] [seconds]",
+					"error",
+				);
 				return;
 			}
 
 			sessionMode = head;
-			const parsed = parts[1] === undefined ? Number.NaN : Number.parseInt(parts[1], 10);
-			if (Number.isFinite(parsed) && parsed >= 0) sessionTimeout = parsed;
+			if (hasSeconds) sessionTimeout = secondsArg;
 			paintStatus(ctx);
-			const seconds = sessionTimeout ?? lastConfig.autopilot.timeoutSeconds;
+
+			const effective = resolvePolicy({
+				config,
+				...(sessionMode !== undefined ? { sessionMode } : {}),
+				...(sessionDeadline !== undefined ? { sessionDeadline } : {}),
+				host: hostKind(ctx),
+			});
 			const describe =
 				head === "off"
-					? "always ask the human"
+					? `ask the human, but the autopilot answers after ${effective.policy.timeoutSeconds}s if nobody does${
+							effective.policy.timeoutSeconds === 0 ? " (safety net disabled!)" : ""
+						}`
 					: head === "on"
 						? "never ask — the model answers every questionnaire"
-						: `ask, then self-answer after ${seconds}s`;
+						: `ask, then self-answer after ${effective.policy.timeoutSeconds}s`;
 			ctx.ui.notify(
-				`Autopilot for this session: ${describe}.${head === "off" ? "" : " (/decide reset to undo)"}`,
-				"info",
+				`Autopilot for this session: ${describe}.${head === "on" ? "" : " (/decide reset to undo)"}`,
+				head === "off" && effective.policy.timeoutSeconds === 0 ? "warning" : "info",
 			);
 		},
 	});
@@ -347,12 +407,12 @@ export default function piDecide(pi: ExtensionAPI): void {
 			let outcome: DialogOutcome;
 			try {
 				emitBell(resolved.policy, host);
-				outcome = await showDialog(
-					ctx,
-					questionnaire,
-					resolved.policy.timeoutSeconds,
-					resolved.mode === "auto" && resolved.policy.timeoutSeconds > 0 ? "no one has answered" : undefined,
-				);
+				outcome = await showDialog(ctx, questionnaire, resolved.policy.timeoutSeconds, {
+					deadlineKind: resolved.deadlineKind,
+					...(resolved.mode === "auto" && resolved.policy.timeoutSeconds > 0
+						? { hint: "no one has answered" }
+						: {}),
+				});
 			} catch (error) {
 				return rejected(
 					questionnaire,

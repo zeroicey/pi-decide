@@ -58,6 +58,12 @@ export interface ViewState {
 	globalNote?: string;
 	/** Why the countdown is running (shown in the countdown line). */
 	autopilotHint?: string;
+	/**
+	 * `"auto"` is a delay the user asked for; `"deadline"` is the safety net on
+	 * an `off` policy. They read differently on purpose: one is "I will answer
+	 * soon", the other is "nobody answered, so I am taking over".
+	 */
+	deadlineKind?: "auto" | "deadline";
 }
 
 export const MIN_WIDTH = 24;
@@ -158,13 +164,10 @@ function previewPane(option: ViewOption, palette: Palette, width: number): strin
 function countdownLine(state: ViewState, palette: Palette): string[] {
 	if (state.countdown === undefined) return [];
 	const seconds = Math.max(0, Math.floor(state.countdown));
-	const hint = state.autopilotHint ?? "autopilot will answer";
-	return [
-		palette.fg(
-			"warning",
-			`⏱  autopilot answers in ${seconds}s — press any key to take over (${hint})`,
-		),
-	];
+	const deadline = state.deadlineKind === "deadline";
+	const hint = state.autopilotHint ?? (deadline ? "nobody has answered" : "autopilot will answer");
+	const lead = deadline ? "nobody answered — autopilot takes over in" : "autopilot answers in";
+	return [palette.fg("warning", `⏱  ${lead} ${seconds}s — press any key to keep answering (${hint})`)];
 }
 
 function submitLines(state: ViewState, palette: Palette, width: number): string[] {

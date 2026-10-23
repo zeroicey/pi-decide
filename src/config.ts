@@ -37,6 +37,13 @@ export interface DecideConfig {
 		mode: PolicyMode;
 		/** Seconds before an `auto` dialog answers itself. `0` = wait forever. */
 		timeoutSeconds: number;
+		/**
+		 * Safety net for the `off` mode: after this long with no input, the
+		 * autopilot answers anyway. `0` = no safety net, an `off` dialog waits
+		 * forever. This exists so that "an unattended run never hangs" holds
+		 * regardless of which mode is selected.
+		 */
+		deadlineSeconds: number;
 	};
 	ui: {
 		/** Terminal BEL when the dialog starts waiting on a human. */
@@ -52,7 +59,7 @@ export interface DecideConfig {
 export function defaultConfig(): DecideConfig {
 	return {
 		enabled: true,
-		autopilot: { mode: "off", timeoutSeconds: 180 },
+		autopilot: { mode: "off", timeoutSeconds: 180, deadlineSeconds: 900 },
 		ui: { bell: true },
 		judge: { model: null, tailMessages: 10, maxTailChars: 8000, timeoutMs: 90_000 },
 		limits: { maxQuestions: 8, maxOptions: 8 },
@@ -102,6 +109,7 @@ export function mergeConfig(base: DecideConfig, raw: unknown): DecideConfig {
 			mode: parsePolicyMode(autopilot.mode) ?? base.autopilot.mode,
 			// 0 means "no countdown"; anything above a day is a typo, not a wish.
 			timeoutSeconds: int(autopilot.timeoutSeconds, base.autopilot.timeoutSeconds, 0, 86_400),
+			deadlineSeconds: int(autopilot.deadlineSeconds, base.autopilot.deadlineSeconds, 0, 86_400),
 		},
 		ui: { bell: bool(ui.bell, base.ui.bell) },
 		judge: {

@@ -60,10 +60,14 @@ export function formatResult(result: DecisionResult, questionnaire: Questionnair
 			);
 			break;
 		case "timeout":
+			// Two flavours, and the difference matters to the reader: `auto` was a
+			// delay the user chose, `deadline` fired because nobody was there.
 			header.push(
-				`The dialog waited ${result.reason ?? "too long"} with no human input, so the autopilot answered.`,
+				`Nobody answered the dialog (${result.reason ?? "the countdown expired"}), so the autopilot answered.`,
 			);
-			header.push("The user did not confirm these choices. Continue, and mention the assumption in your report.");
+			header.push(
+				"The user did not see these questions and did not confirm these choices. Continue, but say in your final report which decisions were assumed rather than approved.",
+			);
 			break;
 		case "cancelled":
 			header.push(

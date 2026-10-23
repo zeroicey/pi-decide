@@ -12,13 +12,13 @@ describe("mergeConfig", () => {
 	test("applies valid overrides", () => {
 		const config = mergeConfig(defaultConfig(), {
 			enabled: false,
-			autopilot: { mode: "auto", timeoutSeconds: 45 },
+			autopilot: { mode: "auto", timeoutSeconds: 45, deadlineSeconds: 600 },
 			ui: { bell: false },
 			judge: { tailMessages: 4, maxTailChars: 2000, timeoutMs: 5000 },
 			limits: { maxQuestions: 3, maxOptions: 5 },
 		});
 		expect(config.enabled).toBe(false);
-		expect(config.autopilot).toEqual({ mode: "auto", timeoutSeconds: 45 });
+		expect(config.autopilot).toEqual({ mode: "auto", timeoutSeconds: 45, deadlineSeconds: 600 });
 		expect(config.ui.bell).toBe(false);
 		expect(config.judge.tailMessages).toBe(4);
 		expect(config.judge.maxTailChars).toBe(2000);
@@ -30,13 +30,14 @@ describe("mergeConfig", () => {
 		const defaults = defaultConfig();
 		const config = mergeConfig(defaults, {
 			enabled: "yes",
-			autopilot: { mode: "maybe", timeoutSeconds: -3 },
+			autopilot: { mode: "maybe", timeoutSeconds: -3, deadlineSeconds: -1 },
 			judge: { tailMessages: 0, maxTailChars: "big", timeoutMs: 1.5 },
 			limits: { maxQuestions: 999, maxOptions: 1 },
 		});
 		expect(config.enabled).toBe(defaults.enabled);
 		expect(config.autopilot.mode).toBe(defaults.autopilot.mode);
 		expect(config.autopilot.timeoutSeconds).toBe(defaults.autopilot.timeoutSeconds);
+		expect(config.autopilot.deadlineSeconds).toBe(defaults.autopilot.deadlineSeconds);
 		expect(config.judge.tailMessages).toBe(defaults.judge.tailMessages);
 		expect(config.judge.maxTailChars).toBe(defaults.judge.maxTailChars);
 		expect(config.judge.timeoutMs).toBe(defaults.judge.timeoutMs);

@@ -6,11 +6,13 @@ import { fakeTheme, fakeTui, KEY, makeHarness, stripAnsi } from "./harness.ts";
 function open(
 	q: ReturnType<typeof questionnaire>,
 	timeoutSeconds = 0,
+	extra: { deadlineKind?: "auto" | "deadline" } = {},
 ) {
 	const outcomes: DialogOutcome[] = [];
 	const dialog = new QuestionnaireDialog({
 		questionnaire: q,
 		...(timeoutSeconds > 0 ? { timeoutSeconds } : {}),
+		...(extra.deadlineKind !== undefined ? { deadlineKind: extra.deadlineKind } : {}),
 		tui: fakeTui() as never,
 		theme: fakeTheme(),
 		keybindings: {} as never,
@@ -232,6 +234,35 @@ describe("countdown", () => {
 		const { harness, dialog, outcomes } = open(questionnaire(question()), 30);
 		harness.press(KEY.down);
 		expect(dialog.render(80).map(stripAnsi).join("\n")).not.toContain("autopilot answers");
+		expect(outcomes).toHaveLength(0);
+	});
+});
+
+describe("the safety net on an `off` policy", () => {
+	test("reads differently from a deliberate `auto` delay", () => {
+		const net = open(questionnaire(question()), 5, { deadlineKind: "deadline" });
+		const netText = net.dialog.render(80).map(stripAnsi).join("\n");
+		expect(netText).toContain("nobody answered — autopilot takes over in 5s");
+
+		const deliberate = new QuestionnaireDialog({
+			questionnaire: questionnaire(question()),
+			timeoutSeconds: 5,
+			deadlineKind: "auto",
+			tui: fakeTui() as never,
+			theme: fakeTheme(),
+			keybindings: {} as never,
+			done: () => {},
+		});
+		const deliberateText = deliberate.render(80).map(stripAnsi).join("\n");
+		expect(deliberateText).toContain("autopilot answers in 5s");
+		expect(deliberateText).not.toContain("nobody answered");
+	});
+
+	test("a key press cancels the net, so a present human keeps control", () => {
+		const { harness, dialog, outcomes } = open(questionnaire(question()), 900, { deadlineKind: "deadline" });
+		expect(dialog.render(80).map(stripAnsi).join("\n")).toContain("takes over in 900s");
+		harness.press(KEY.down);
+		expect(dialog.render(80).map(stripAnsi).join("\n")).not.toContain("takes over");
 		expect(outcomes).toHaveLength(0);
 	});
 });

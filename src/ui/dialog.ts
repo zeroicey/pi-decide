@@ -33,6 +33,8 @@ export interface DialogOptions {
 	/** Seconds before the autopilot takes over. `0`/undefined disables the countdown. */
 	timeoutSeconds?: number;
 	autopilotHint?: string;
+	/** Distinguishes an `auto` delay from an `off` policy's safety net. */
+	deadlineKind?: "auto" | "deadline";
 	tui: TUI;
 	theme: Theme;
 	keybindings: KeybindingsManager;
@@ -202,6 +204,7 @@ export class QuestionnaireDialog {
 			...(this.countdown !== undefined ? { countdown: this.countdown } : {}),
 			...(this.globalNote !== undefined ? { globalNote: this.globalNote } : {}),
 			...(this.options.autopilotHint !== undefined ? { autopilotHint: this.options.autopilotHint } : {}),
+			...(this.options.deadlineKind !== undefined ? { deadlineKind: this.options.deadlineKind } : {}),
 		};
 	}
 
