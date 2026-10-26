@@ -111,6 +111,7 @@ function showDialog(
 			render: (width: number) => dialog.render(width),
 			invalidate: () => dialog.invalidate(),
 			handleInput: (data: string) => dialog.handleInput(data),
+			handleMouse: (event) => dialog.handleMouse(event),
 			dispose: () => dialog.dispose(),
 		};
 	});

@@ -212,7 +212,27 @@ a different provider to remove that coupling.
 | `Tab` / `←` `→` | Move between questions (and the Submit tab) |
 | `n` | Note on this answer; on the Submit tab, one global note |
 | `Esc` | Back out of the editor; cancel the whole questionnaire |
-| `Ctrl+]` | Collapse the dialog to one line, then restore it |
+| `Ctrl+]` / `c` | Collapse the dialog to one line, then restore it |
+| click the title bar | Same, with a mouse (fullscreen mode) |
+
+### Making room to read
+
+The dialog sits in the editor slot, so every row it draws is a row of agent
+output you cannot see — and the whole point of a question is usually that you
+need to read something first. Three things keep that from turning into a
+staring contest:
+
+1. **It never takes the whole screen.** It stops at roughly 75% of the terminal
+   height, so the footer and the message that triggered the question stay
+   visible.
+2. **`[ − collapse ]` in the title bar, and `c`.** Both shrink it to a single
+   line — still showing the question, the answered count and the countdown —
+   and both bring it back. Clicking the button works in fullscreen mode; the
+   key works everywhere.
+3. **When rows really run out, it says what it hid.** The option list is
+   windowed around the highlighted row with an explicit `… N more options`
+   marker, previews and descriptions go first, and the key hints at the bottom
+   are never the thing that gets cut.
 
 `Type something.` is always the last row of a question and replaces the selected
 option — you cannot end up with "LRU" *and* an unrelated sentence. In

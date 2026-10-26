@@ -8,14 +8,43 @@
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Editor, type KeybindingsManager, Key, matchesKey, type TUI } from "@earendil-works/pi-tui";
+import {
+	Editor,
+	type KeybindingsManager,
+	Key,
+	matchesKey,
+	type TUI,
+	type TuiMouseEvent,
+	type TuiMouseEventResult,
+} from "@earendil-works/pi-tui";
 import type { Palette, Token } from "./palette.ts";
 import type { Question, Questionnaire } from "../types.ts";
-import { renderCollapsed, renderDialog, type ViewOption, type ViewState } from "./view.ts";
+import {
+	collapseButtonSpan,
+	expandButtonSpan,
+	renderCollapsed,
+	renderDialog,
+	type ViewOption,
+	type ViewState,
+} from "./view.ts";
 
 /** Rows the runtime appends to every question. */
 export const CUSTOM_ROW_LABEL = "Type something.";
 export const NOTE_ROW_LABEL = "Add a note";
+
+/**
+ * Share of the terminal the dialog will not take, so the conversation stays
+ * readable while a decision is on screen. The dialog sits in the editor slot:
+ * whatever it renders, the transcript above it loses.
+ *
+ * Twenty-five percent (with a five-row floor for the footer and the last
+ * message) leaves the dialog up to 75% of the height — enough that most
+ * questionnaires show every option without windowing — while still guaranteeing
+ * the message that triggered the question stays on screen. `c` and the
+ * title-bar button give the whole height back when the answer needs it.
+ */
+const TRANSCRIPT_SHARE = 0.25;
+const TRANSCRIPT_MIN_ROWS = 5;
 
 export interface DialogAnswer {
 	selected: string[];
@@ -27,6 +56,13 @@ export type DialogOutcome =
 	| { kind: "answered"; answers: Map<number, DialogAnswer>; globalNote?: string }
 	| { kind: "cancelled" }
 	| { kind: "autopilot"; waitedSeconds: number };
+
+/**
+ * The collapse key. `ctrl+]` is the documented one; `c` is the one a human
+ * guesses. Neither is an option label, so no keystroke meant for an option is
+ * stolen — and both are printed in the hint line and on the collapse button.
+ */
+const KEY_COLLAPSE = "c";
 
 export interface DialogOptions {
 	questionnaire: Questionnaire;
@@ -67,6 +103,8 @@ export class QuestionnaireDialog {
 	/** What an open note editor writes into: the current question, or the whole questionnaire. */
 	private noteTarget: "question" | "global" = "question";
 	private collapsed = false;
+	/** Width of the most recent render, for the mouse hit-box. */
+	private lastWidth = 80;
 	private countdown?: number;
 	private timer?: ReturnType<typeof setInterval>;
 	private deadline?: number;
@@ -200,6 +238,7 @@ export class QuestionnaireDialog {
 			options: this.rows(),
 			index: this.index,
 			focus: this.focus,
+			...(this.current()?.question.multiSelect === true ? { multiSelect: true } : {}),
 			...(this.focus !== "browse" ? { editorLines: this.editor.render(Math.max(1, 60)) } : {}),
 			...(this.countdown !== undefined ? { countdown: this.countdown } : {}),
 			...(this.globalNote !== undefined ? { globalNote: this.globalNote } : {}),
@@ -302,11 +341,11 @@ export class QuestionnaireDialog {
 	}
 
 	handleInput(data: string): void {
-		// A collapsed dialog only listens for the toggle and for Escape.
+		// A collapsed dialog is a one-line summary: it listens for the toggle (and
+		// for Escape, so a collapsed dialog is still cancellable) and nothing else.
 		if (this.collapsed) {
-			if (matchesKey(data, Key.ctrl("]"))) {
-				this.collapsed = false;
-				this.refresh();
+			if (matchesKey(data, Key.ctrl("]")) || matchesKey(data, KEY_COLLAPSE)) {
+				this.setCollapsed(false);
 				return;
 			}
 			if (matchesKey(data, Key.escape)) this.settle({ kind: "cancelled" });
@@ -321,15 +360,20 @@ export class QuestionnaireDialog {
 				this.refresh();
 				return;
 			}
+			// `ctrl+]` is a global escape hatch, so it still works mid-typing. `c`
+			// does not: that is a character someone may be typing right now.
+			if (matchesKey(data, Key.ctrl("]"))) {
+				this.setCollapsed(true);
+				return;
+			}
 			this.takeOver();
 			this.editor.handleInput(data);
 			this.refresh();
 			return;
 		}
 
-		if (matchesKey(data, Key.ctrl("]"))) {
-			this.collapsed = true;
-			this.refresh();
+		if (matchesKey(data, Key.ctrl("]")) || matchesKey(data, KEY_COLLAPSE)) {
+			this.setCollapsed(true);
 			return;
 		}
 
@@ -435,14 +479,55 @@ export class QuestionnaireDialog {
 
 	// --- rendering ---------------------------------------------------------
 
+	private collapsedLine(width: number): string {
+		return renderCollapsed(this.buildView(), this.palette, width);
+	}
+
+	/**
+	 * Rows this dialog may occupy. Pi hands the editor slot whatever the chat
+	 * and footer do not need, so the ceiling exists to keep the transcript
+	 * readable rather than because the terminal is unbounded.
+	 */
+	private heightBudget(): number | undefined {
+		const rows = this.options.tui.terminal?.rows;
+		if (typeof rows !== "number" || !Number.isFinite(rows) || rows <= 0) return undefined;
+		const reserved = Math.max(TRANSCRIPT_MIN_ROWS, Math.floor(rows * TRANSCRIPT_SHARE));
+		return Math.max(1, Math.floor(rows) - reserved);
+	}
+
+	private setCollapsed(collapsed: boolean): void {
+		if (this.collapsed === collapsed) return;
+		this.collapsed = collapsed;
+		this.refresh();
+	}
+
+	/**
+	 * Mouse support, because "there is a button" should be literally true: a
+	 * click on the title-bar button collapses and expands the dialog. Terminals
+	 * in regular mode do not report mouse events at all, so the keyboard path
+	 * (`ctrl+]` / `c`) remains the one that always works.
+	 */
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (event.type !== "press" && event.type !== "click") return undefined;
+		if (event.button !== "left") return undefined;
+		// Only the first rendered row carries the button.
+		if (event.y !== 0) return undefined;
+		const span = this.collapsed ? expandButtonSpan(this.lastWidth) : collapseButtonSpan(this.lastWidth);
+		if (span === undefined) return undefined;
+		if (event.x < span.start || event.x >= span.end) return undefined;
+		this.setCollapsed(!this.collapsed);
+		return { handled: true, render: true, focus: true };
+	}
+
 	invalidate(): void {
 		this.cachedLines = undefined;
 	}
 
 	render(width: number): string[] {
-		if (this.collapsed) return [renderCollapsed(this.buildView(), this.palette)];
+		this.lastWidth = width;
+		if (this.collapsed) return [this.collapsedLine(width)];
 		if (this.cachedLines !== undefined && this.cachedWidth === width) return this.cachedLines;
-		const lines = renderDialog(this.buildView(), this.palette, width);
+		const lines = renderDialog(this.buildView(), this.palette, width, this.heightBudget());
 		this.cachedLines = lines;
 		this.cachedWidth = width;
 		return lines;

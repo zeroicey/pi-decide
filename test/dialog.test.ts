@@ -212,7 +212,7 @@ describe("keyboard", () => {
 		const { harness } = open(questionnaire(question()));
 		harness.press(KEY.ctrlRightBracket);
 		const collapsed = harness.lastText();
-		expect(collapsed).toContain("ctrl+] to expand");
+		expect(collapsed).toContain("ctrl+] or c to expand");
 		expect(collapsed.split("\n")).toHaveLength(1);
 		harness.press(KEY.ctrlRightBracket);
 		expect(harness.lastText()).toContain("Which cache eviction policy");
@@ -264,5 +264,190 @@ describe("the safety net on an `off` policy", () => {
 		harness.press(KEY.down);
 		expect(dialog.render(80).map(stripAnsi).join("\n")).not.toContain("takes over");
 		expect(outcomes).toHaveLength(0);
+	});
+});
+
+describe("the collapse button", () => {
+	test("hides the title-bar button, and a click on it collapses the dialog", () => {
+		const { dialog } = open(questionnaire(question()));
+		const top = stripAnsi(dialog.render(80)[0] ?? "");
+		const start = top.indexOf("[ − collapse ]");
+		expect(start).toBeGreaterThan(0);
+
+		const expandedHeight = dialog.render(80).length;
+		expect(expandedHeight).toBeGreaterThan(5);
+
+		// A click elsewhere on the title bar does nothing.
+		expect(dialog.handleMouse(mouse(10, 0))).toBeUndefined();
+		expect(dialog.render(80)).toHaveLength(expandedHeight);
+
+		expect(dialog.handleMouse(mouse(start + 2, 0))).toMatchObject({ handled: true });
+		expect(dialog.render(80)).toHaveLength(1);
+		expect(stripAnsi(dialog.render(80)[0] ?? "")).toStartWith("[ + expand ]");
+
+		// And a click on the collapsed button brings it back.
+		expect(dialog.handleMouse(mouse(2, 0))).toMatchObject({ handled: true });
+		expect(dialog.render(80)).toHaveLength(expandedHeight);
+	});
+
+	test("a click on the option list never toggles it", () => {
+		const { dialog } = open(questionnaire(question()));
+		const height = dialog.render(80).length;
+		expect(dialog.handleMouse(mouse(2, 5))).toBeUndefined();
+		expect(dialog.render(80)).toHaveLength(height);
+	});
+
+	test("`c` also collapses, and picking an option still works afterwards", () => {
+		const { harness, last } = open(questionnaire(question()));
+		harness.press("c");
+		expect(harness.lastScreen()).toHaveLength(1);
+		harness.press("c");
+		expect(harness.lastText()).toContain("Which cache eviction policy");
+		harness.press(KEY.enter);
+		expect(last()).toMatchObject({ kind: "answered" });
+	});
+
+	test("a collapsed dialog still counts down and can still be cancelled", () => {
+		const { harness, last } = open(questionnaire(question()), 30);
+		harness.press("c");
+		expect(harness.lastText()).toContain("30s");
+		harness.press(KEY.esc);
+		expect(last()).toEqual({ kind: "cancelled" });
+	});
+
+	test("the hint line names the key, so the button is not the only way to find it", () => {
+		const { dialog } = open(questionnaire(question()));
+		expect(dialog.render(80).map(stripAnsi).join("\n")).toContain("c collapse");
+	});
+});
+
+describe("fitting a short terminal", () => {
+	function sized(rows: number, q = questionnaire(question({ header: "A" }), question({ header: "B" }))) {
+		const dialog = new QuestionnaireDialog({
+			questionnaire: q,
+			tui: { terminal: { rows, columns: 80 }, requestRender: () => {} } as never,
+			theme: fakeTheme(),
+			keybindings: {} as never,
+			done: () => {},
+		});
+		return { dialog, text: () => dialog.render(80).map(stripAnsi) };
+	}
+
+	test("leaves rows for the conversation instead of taking the whole screen", () => {
+		for (const rows of [16, 24, 30, 40]) {
+			const { dialog } = sized(rows);
+			expect(dialog.render(80).length).toBeLessThanOrEqual(rows);
+		}
+		// 30 rows: the dialog stops at ~75% and the transcript keeps the rest.
+		expect(sized(30).dialog.render(80).length).toBeLessThanOrEqual(23);
+	});
+
+	test("never loses the key hints or the question, however short the terminal", () => {
+		for (const rows of [10, 12, 14, 18]) {
+			const lines = sized(rows).text();
+			expect(lines.join("\n")).toContain("Esc cancel");
+			expect(lines.length).toBeLessThanOrEqual(rows);
+		}
+	});
+
+	test("says how many options it hid rather than silently truncating", () => {
+		const { text } = sized(16, questionnaire(
+			question({
+				options: Array.from({ length: 8 }, (_, index) => ({
+					label: `Option ${index + 1}`,
+					description: "a choice with a description that costs a row",
+				})),
+			}),
+		));
+		expect(text().join("\n")).toMatch(/… \d+ more options/);
+		// An elided list must never look like a complete one.
+		expect(text().join("\n")).not.toContain("Option 8");
+	});
+
+	test("always keeps the highlighted row visible while scrolling", () => {
+		const { dialog, text } = sized(20, questionnaire(
+			question({
+				options: Array.from({ length: 8 }, (_, index) => ({ label: `Option ${index + 1}`, description: "desc" })),
+			}),
+		));
+		for (let step = 0; step < 7; step++) {
+			dialog.handleInput(KEY.down);
+			const lines = text();
+			expect(lines.length).toBeLessThanOrEqual(20);
+			expect(lines.join("\n")).toMatch(/❯ \d+\. Option/);
+		}
+	});
+
+	test("keeps the text editor on screen while typing, even when rows are scarce", () => {
+		const { dialog, text } = sized(18);
+		dialog.handleInput(KEY.down);
+		dialog.handleInput(KEY.down);
+		dialog.handleInput(KEY.down);
+		dialog.handleInput(KEY.enter);
+		dialog.handleInput("Redis");
+		const lines = text();
+		expect(lines.join("\n")).toContain("Your answer:");
+		expect(lines.join("\n")).toContain("Redis");
+		expect(lines.length).toBeLessThanOrEqual(18);
+	});
+});
+
+function mouse(x: number, y: number) {
+	return {
+		type: "press" as const,
+		button: "left" as const,
+		x,
+		y,
+		screenX: x,
+		screenY: y,
+		width: 80,
+		height: 40,
+		shift: false,
+		alt: false,
+		ctrl: false,
+	};
+}
+
+describe("the collapse key does not steal typed input", () => {
+	test("`c` is a character while the editor is open, not a toggle", () => {
+		const { harness } = open(questionnaire(question()));
+		harness.press(KEY.down, KEY.down, KEY.down, KEY.enter);
+		harness.press("c", "a", "c", "h", "e");
+		expect(harness.lastText()).toContain("cache");
+		expect(harness.lastText()).toContain("Your answer:");
+	});
+
+	test("ctrl+] still collapses from inside the editor", () => {
+		const { harness } = open(questionnaire(question()));
+		harness.press(KEY.down, KEY.down, KEY.down, KEY.enter);
+		harness.press(KEY.ctrlRightBracket);
+		expect(harness.lastScreen()).toHaveLength(1);
+	});
+});
+
+describe("the Submit page on a short terminal", () => {
+	test("lists unanswered questions first, so a blocker cannot be clipped away", () => {
+		const q = questionnaire(
+			question({ header: "A" }),
+			question({ header: "B" }),
+			question({ header: "C" }),
+			question({ header: "D" }),
+		);
+		const dialog = new QuestionnaireDialog({
+			questionnaire: q,
+			tui: { terminal: { rows: 14, columns: 80 }, requestRender: () => {} } as never,
+			theme: fakeTheme(),
+			keybindings: {} as never,
+			done: () => {},
+		});
+		dialog.handleInput(KEY.enter); // A answered, focus moves to B
+		dialog.handleInput(KEY.right);
+		dialog.handleInput(KEY.right);
+		dialog.handleInput(KEY.right); // B -> C -> D -> Submit, none of them answered
+		const text = dialog.render(80).map(stripAnsi).join("\n");
+		expect(text).toContain("Review before submitting");
+		expect(text).toContain("B");
+		expect(text).toContain("— unanswered");
+		expect(dialog.render(80).length).toBeLessThanOrEqual(14);
 	});
 });

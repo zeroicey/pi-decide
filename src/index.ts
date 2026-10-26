@@ -32,7 +32,7 @@ export { buildTranscript, compact, textOf } from "./transcript.ts";
 
 export { QuestionnaireDialog, CUSTOM_ROW_LABEL, NOTE_ROW_LABEL } from "./ui/dialog.ts";
 export type { DialogAnswer, DialogOptions, DialogOutcome } from "./ui/dialog.ts";
-export { renderDialog, renderCollapsed } from "./ui/view.ts";
+export { renderDialog, renderCollapsed, collapseButtonSpan, expandButtonSpan, MIN_HEIGHT, MIN_WIDTH } from "./ui/view.ts";
 export type { ViewOption, ViewState, ViewTab } from "./ui/view.ts";
 export { ansiPalette, PLAIN_PALETTE } from "./ui/palette.ts";
 export type { Palette, Token } from "./ui/palette.ts";
