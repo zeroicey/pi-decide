@@ -153,7 +153,7 @@ describe("keyboard", () => {
 		const { harness, last } = open(questionnaire(multi));
 		harness.press(KEY.space); // check LRU
 		harness.press(KEY.down, KEY.space); // check TTL
-		expect(harness.lastText()).toContain("◉ LRU");
+		expect(harness.lastText()).toContain("✓ LRU");
 		harness.press(KEY.enter);
 		const outcome = last();
 		expect(outcome?.kind === "answered" && [...outcome.answers.values()][0]?.selected).toEqual(["LRU", "TTL 5m"]);
@@ -469,10 +469,31 @@ describe("multi-select", () => {
 		outcome?.kind === "answered" ? [...outcome.answers.values()][0] : undefined;
 
 	test("renders a checkbox column that only appears for multiSelect questions", () => {
-		expect(multi().dialog.render(80).map(stripAnsi).join("\n")).not.toContain("◉");
+		const single = open(questionnaire(question()));
+		expect(single.dialog.render(80).map(stripAnsi).join("\n")).not.toContain("▢");
+
+		const { harness } = multi();
+		// Every pickable row gets an empty box, so the column is present before any pick.
+		expect(harness.lastText()).toContain("▢ LRU");
+		harness.press(KEY.space);
+		expect(harness.lastText()).toContain("✓ LRU");
+		expect(harness.lastText()).toContain("▢ TTL 5m");
+	});
+
+	test("drops the numbering, keeping the checkbox column aligned", () => {
 		const { harness } = multi();
 		harness.press(KEY.space);
-		expect(harness.lastText()).toContain("◉ LRU");
+		const text = harness.lastText();
+		expect(text).not.toMatch(/\d+\. /);
+
+		// Options and the appended action rows share one marker column, so a
+		// label never shifts sideways when its box goes from empty to checked.
+		const labelColumn = (label: string) => {
+			const line = text.split("\n").find((candidate) => candidate.includes(label));
+			return line === undefined ? -1 : line.indexOf(label);
+		};
+		const columns = ["LRU", "TTL 5m", "No cache", "Type something.", "Add a note"].map(labelColumn);
+		expect(columns.every((column) => column === columns[0])).toBe(true);
 	});
 
 	test("Space checks several options and Enter submits all of them, in authored order", () => {

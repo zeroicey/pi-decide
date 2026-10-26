@@ -214,6 +214,23 @@ function tabStrip(state: ViewState, palette: Palette, width: number): string[] {
 	return lines;
 }
 
+/**
+ * One option row.
+ *
+ * Two shapes, because the two modes answer different questions:
+ *
+ * - single-select asks *which one*, so the rows are numbered; the number is
+ *   also the key the user can type.
+ * - multi-select asks *which of these*, so a number is noise — nobody picks
+ *   "number 3", they pick a label. The row gets a checkbox instead, and the
+ *   boxes are uniform width so labels stay aligned whether checked or not.
+ *
+ * `★` stays in both: it is the model's recommendation, which is a different
+ * axis from "I checked this". One option is recommended; any number are checked.
+ */
+const CHECKED = "✓";
+const UNCHECKED = "▢";
+
 function optionRow(
 	option: ViewOption,
 	index: number,
@@ -224,11 +241,22 @@ function optionRow(
 ): string[] {
 	const selected = index === state.index;
 	const pointer = selected ? palette.fg("accent", "❯ ") : "  ";
-	const number = `${index + 1}. `;
-	const check = option.kind === "option" ? (option.checked ? "◉ " : "") : "";
 	const star = option.recommended ? palette.fg("success", " ★") : "";
-	const labelColor = selected ? "accent" : option.kind === "option" ? "text" : "muted";
-	const label = palette.fg(labelColor, `${number}${check}${option.label}`) + star;
+	const isOption = option.kind === "option";
+
+	let marker: string;
+	if (state.multiSelect === true && isOption) {
+		marker = option.checked === true ? `${palette.fg("success", CHECKED)} ` : `${palette.fg("dim", UNCHECKED)} `;
+	} else if (state.multiSelect === true) {
+		// The appended rows are actions, not choices: keep the column aligned
+		// without pretending they can be ticked.
+		marker = "  ";
+	} else {
+		marker = `${index + 1}. `;
+	}
+
+	const labelColor = selected ? "accent" : isOption ? "text" : "muted";
+	const label = marker + palette.fg(labelColor, option.label) + star;
 	const lines = withPrefix(palette, pointer, "   ", label, width);
 	if (showDescription && option.description !== undefined && option.description.length > 0) {
 		lines.push(...withPrefix(palette, "     ", "     ", palette.fg("muted", option.description), width));

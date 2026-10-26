@@ -1,6 +1,6 @@
 {
 	"name": "pi-decide",
-	"version": "0.3.1",
+	"version": "0.3.2",
 	"description": "Pi extension. A structured multi-question dialog the model puts to you — with an autopilot that answers it itself when nobody is around, so long unattended runs never block on a human decision.",
 	"keywords": [
 		"pi-package",

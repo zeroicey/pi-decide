@@ -245,15 +245,27 @@ asking twice.
 Set `multiSelect: true` on a question and its options become checkboxes:
 
 ```
-  1. ◉ LRU
-❯ 2. ◉ TTL 5m
-  3. No cache
-  4. Type something.
+  ✓ LRU
+❯ ✓ TTL 5m ★
+  ▢ No cache
+    Type something.
+    Add a note
 ```
 
 `Space` toggles the highlighted row, `Enter` submits every checked one. The
 hint line only advertises `Space toggle` when the current question actually
 accepts it, so a single-select dialog never suggests a key that does nothing.
+
+Two details that are deliberate rather than incidental:
+
+- **No numbering.** A number answers "which one?", and multi-select is asking
+  "which of these?" — you pick a label, not position 3. The boxes are uniform
+  width (`▢` / `✓`), so a label never shifts sideways when it is checked, and
+  the appended `Type something.` / `Add a note` rows keep the same column
+  without pretending to be tickable.
+- **`★` is not the checkbox.** It marks the option the model recommends, which
+  is a different axis from the user's tick: exactly one option can be
+  recommended, any number can be checked.
 
 The model is told to reach for this when options are not mutually exclusive —
 an invented "All of the above" option loses which items were actually chosen,
