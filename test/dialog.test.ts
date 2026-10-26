@@ -451,3 +451,52 @@ describe("the Submit page on a short terminal", () => {
 		expect(dialog.render(80).length).toBeLessThanOrEqual(14);
 	});
 });
+
+describe("multi-select", () => {
+	function multi() {
+		const outcomes: DialogOutcome[] = [];
+		const dialog = new QuestionnaireDialog({
+			questionnaire: questionnaire(question({ header: "Multi", multiSelect: true })),
+			tui: fakeTui() as never,
+			theme: fakeTheme(),
+			keybindings: {} as never,
+			done: (outcome) => outcomes.push(outcome),
+		});
+		return { dialog, harness: makeHarness(dialog), last: () => outcomes[outcomes.length - 1] };
+	}
+
+	const answersOf = (outcome: DialogOutcome | undefined) =>
+		outcome?.kind === "answered" ? [...outcome.answers.values()][0] : undefined;
+
+	test("renders a checkbox column that only appears for multiSelect questions", () => {
+		expect(multi().dialog.render(80).map(stripAnsi).join("\n")).not.toContain("◉");
+		const { harness } = multi();
+		harness.press(KEY.space);
+		expect(harness.lastText()).toContain("◉ LRU");
+	});
+
+	test("Space checks several options and Enter submits all of them, in authored order", () => {
+		const { harness, last } = multi();
+		harness.press(KEY.space, KEY.down, KEY.space, KEY.down, KEY.space, KEY.enter);
+		expect(answersOf(last())?.selected).toEqual(["LRU", "TTL 5m", "No cache"]);
+	});
+
+	test("Space on a checked option unchecks it", () => {
+		const { harness, last } = multi();
+		harness.press(KEY.space, KEY.down, KEY.space, KEY.up, KEY.space, KEY.enter);
+		expect(answersOf(last())?.selected).toEqual(["TTL 5m"]);
+	});
+
+	test("the hint line advertises Space toggle only where it does something", () => {
+		const single = open(questionnaire(question()));
+		expect(single.dialog.render(80).map(stripAnsi).join("\n")).not.toContain("Space toggle");
+		expect(multi().dialog.render(80).map(stripAnsi).join("\n")).toContain("Space toggle");
+	});
+
+	test("a free-text answer stays exclusive, as documented", () => {
+		const { harness, last } = multi();
+		// rows: 0 LRU, 1 TTL, 2 No cache, 3 Type something.
+		harness.press(KEY.space, KEY.down, KEY.down, KEY.down, KEY.enter, "x", KEY.enter);
+		expect(answersOf(last())).toMatchObject({ selected: [], text: "x" });
+	});
+});

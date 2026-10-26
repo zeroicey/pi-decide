@@ -31,14 +31,17 @@ const TOOL_DESCRIPTION = `Ask the user one or more structured questions when a d
 
 The dialog offers written-out options with descriptions, a free-text row, per-question notes, and a Submit tab that reviews everything before it goes back. Up to 8 questions with 2-8 options each. Provide a \`preview\` (markdown mockup, diff, config) when the choice is easier to see than to describe.
 
+Set \`multiSelect: true\` when the options are not mutually exclusive and the user may want several of them — "which of these should I also handle?", "select every check that applies", "which files may I touch?". The dialog then renders checkboxes that toggle with Space, and the answer comes back with every checked label. Do not force a non-exclusive choice into a single one with an "all of the above" option: that label is ambiguous about ordering and impossible for the autopilot to reason about.
+
 Autopilot: when the session policy is \`on\`, or the host has no UI, or the user is away and the countdown expires, a model answers these questions on the user's behalf and the result is labelled as such. Mark your own best option with \`recommended\` — the autopilot uses it as the default, so a good recommendation is what keeps an unattended run on track.`;
 
 const PROMPT_SNIPPET =
-	"Ask the user up to 8 structured questions (2-8 options each) when a decision needs a human; autopilot answers them when nobody is there";
+	"Ask the user up to 8 structured questions (2-8 options each, single- or multi-select) when a decision needs a human; autopilot answers them when nobody is there";
 
 const PROMPT_GUIDELINES = [
 	"Use ask_user_question when the request is underspecified and you cannot proceed without a concrete decision. Do not use it to confirm something you can verify yourself.",
 	"Every question needs 2-8 options with one-sentence descriptions. Never author an \"Other\" or \"Type something.\" option — that row is appended automatically.",
+	"Ask a multi-select question (`multiSelect: true`, phrased plurally) when the choices are not mutually exclusive — the user picks several with Space. Inventing an \"All of the above\" option instead loses which items were actually chosen, so prefer multiSelect for non-exclusive sets.",
 	"Always set `recommended` to the label of the option you would pick, with a short `recommendedBecause`. The autopilot falls back to it, so this is what decides an unattended run.",
 	"Do not stack several ask_user_question calls back to back. Group the questions into one invocation.",
 	"Check the result envelope: answers marked `[autopilot]` were not chosen by the user. State the assumption in your final report rather than implying it was approved.",

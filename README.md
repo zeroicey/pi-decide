@@ -240,6 +240,25 @@ option — you cannot end up with "LRU" *and* an unrelated sentence. In
 ambiguous, and a free-text answer that silently kept checkboxes is worse than
 asking twice.
 
+### Multi-select
+
+Set `multiSelect: true` on a question and its options become checkboxes:
+
+```
+  1. ◉ LRU
+❯ 2. ◉ TTL 5m
+  3. No cache
+  4. Type something.
+```
+
+`Space` toggles the highlighted row, `Enter` submits every checked one. The
+hint line only advertises `Space toggle` when the current question actually
+accepts it, so a single-select dialog never suggests a key that does nothing.
+
+The model is told to reach for this when options are not mutually exclusive —
+an invented "All of the above" option loses which items were actually chosen,
+and gives the autopilot nothing to reason about.
+
 ## Running unattended
 
 The intended pattern:

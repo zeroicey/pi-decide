@@ -154,3 +154,26 @@ describe("refused questions", () => {
 		expect(text).toContain('steered to the cautious option "Back up first"');
 	});
 });
+
+describe("multi-select answers", () => {
+	test("every checked label reaches the model, quoted and separated", () => {
+		const q = questionnaire(question({ header: "Touched", multiSelect: true }));
+		const result: DecisionResult = {
+			answers: [
+				{
+					index: 0,
+					header: "Touched",
+					question: q.questions[0]?.question ?? "",
+					selected: ["LRU", "TTL 5m", "No cache"],
+					source: "user",
+				},
+			],
+			outcome: "answered",
+			unanswered: [],
+		};
+		const text = formatResult(result, q);
+		expect(text).toContain('"LRU", "TTL 5m", "No cache"');
+		// Three picks must not be flattened into one string the model has to split.
+		expect(text).not.toContain('"LRU, TTL 5m, No cache"');
+	});
+});
