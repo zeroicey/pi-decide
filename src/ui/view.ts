@@ -81,6 +81,14 @@ export interface ViewState {
 	deadlineKind?: "auto" | "deadline";
 }
 
+/**
+ * Width below which the dialog gets genuinely unpleasant -- but not a floor.
+ *
+ * A component must never render a line wider than the width it was handed: the
+ * terminal hard-wraps it, every row after it shifts, and the whole frame tears
+ * apart. So this is advisory (the layout degrades through it) rather than a
+ * clamp. A 20-column terminal gets a 20-column dialog.
+ */
 export const MIN_WIDTH = 24;
 
 /** Smallest dialog worth rendering: title, one option, hints, rule. */
@@ -164,7 +172,7 @@ function titleBar(palette: Palette, layout: TitleLayout): string {
  * looks like it is clicking.
  */
 export function collapseButtonSpan(width: number): { start: number; end: number } | undefined {
-	return titleLayout(Math.max(MIN_WIDTH, width)).span;
+	return titleLayout(width).span;
 }
 
 /** Columns covered by the expand button on the collapsed one-line summary. */
@@ -287,13 +295,13 @@ function countdownLine(state: ViewState, palette: Palette): string[] {
 	return [palette.fg("warning", `⏱  ${lead} ${seconds}s — press any key to keep answering (${hint})`)];
 }
 
-function submitLines(state: ViewState, palette: Palette, width: number): string[] {
+function submitLines(state: ViewState, palette: Palette, width: number, air = true): string[] {
 	const lines: string[] = [];
 	const missing = state.tabs.filter((tab) => !tab.answered);
 	const done = state.tabs.filter((tab) => tab.answered);
 
 	lines.push(...withPrefix(palette, "  ", "  ", palette.fg("accent", "Review before submitting"), width));
-	lines.push("");
+	if (air) lines.push("");
 
 	// Unanswered questions first. They are the whole reason this page exists, and
 	// the dialog can be short enough to clip its own tail — a blocking row that
@@ -326,7 +334,7 @@ function submitLines(state: ViewState, palette: Palette, width: number): string[
 		lines.push(...withPrefix(palette, "  ", "    ", palette.fg("muted", `global note: ${state.globalNote}`), width));
 	}
 
-	lines.push("");
+	if (air) lines.push("");
 	lines.push(
 		...withPrefix(
 			palette,
@@ -338,6 +346,60 @@ function submitLines(state: ViewState, palette: Palette, width: number): string[
 			width,
 		),
 	);
+	return lines;
+}
+
+/**
+ * A Submit page shorter than its content, keeping the rows that block the
+ * user. Unanswered questions are the reason the page cannot be submitted, so
+ * they are drawn first and are the last thing to be elided; a count of what was
+ * hidden follows, the same way the option list does it.
+ */
+function submitWindowed(
+	state: ViewState,
+	palette: Palette,
+	width: number,
+	air: boolean,
+	budget: number,
+): string[] {
+	const fixed = submitLines({ ...state, tabs: [] }, palette, width, air);
+	const room = budget - fixed.length;
+	if (room >= state.tabs.length) return submitLines(state, palette, width, air);
+
+	const missing = state.tabs.filter((tab) => !tab.answered);
+	const done = state.tabs.filter((tab) => tab.answered);
+	const rows = (tab: ViewState["tabs"][number]) =>
+		tab.note !== undefined && tab.note.length > 0 ? 2 : 1;
+
+	// Every unanswered row first: those are the blockers. One row is spent on the
+	// hidden-count marker, so the budget for rows is one less than `room`.
+	const reserve = done.length > 0 ? 1 : 0;
+	const available = Math.max(0, room - reserve);
+	const shownMissing = missing.slice(0, available);
+	let used = shownMissing.reduce((sum, tab) => sum + rows(tab), 0);
+
+	const shownDone: typeof done = [];
+	for (const tab of done) {
+		if (shownMissing.length + shownDone.length >= state.tabs.length) break;
+		const next = rows(tab);
+		if (used + next > available) break;
+		shownDone.push(tab);
+		used += next;
+	}
+
+	const hidden = state.tabs.length - shownMissing.length - shownDone.length;
+	const window: ViewState = {
+		...state,
+		tabs: [...shownMissing, ...shownDone],
+	};
+	const lines = submitLines(window, palette, width, air);
+	if (hidden > 0) {
+		// Slot the marker just before the trailing hint so it reads as part of the
+		// list rather than as a footer note.
+		const hint = lines.pop();
+		lines.push(palette.fg("dim", `  … ${hidden} more question${hidden === 1 ? "" : "s"} hidden`));
+		if (hint !== undefined) lines.push(hint);
+	}
 	return lines;
 }
 
@@ -375,11 +437,18 @@ function hintTiers(state: ViewState): string[] {
 	return [full, medium, "↑↓ · Enter · Esc · c"];
 }
 
+/**
+ * The hint is one row, always. It is not merely shortened to fit -- the tail's
+ * height has to be predictable, or the row budget the caller gave us stops
+ * meaning anything. So the tiers are tried first, and if even the terse one
+ * overflows a genuinely narrow terminal it is cut with an ellipsis rather than
+ * wrapped into a second row.
+ */
 function hintLine(state: ViewState, palette: Palette, width: number): string[] {
 	const bodyWidth = Math.max(1, width - 2);
 	const tiers = hintTiers(state);
 	const tier = tiers.find((text) => visibleWidth(text) <= bodyWidth) ?? tiers[tiers.length - 1] ?? "";
-	return withPrefix(palette, "  ", "  ", palette.fg("dim", tier), width);
+	return [`  ${truncateToWidth(palette.fg("dim", tier), bodyWidth, "…", false)}`];
 }
 
 /**
@@ -424,7 +493,22 @@ const SPARSER: Density[] = [
 	{ ...FULL_DENSITY, preview: false, descriptions: false, air: false, header: false, tabs: false },
 ];
 
-/** Last resort before clipping: the editor keeps its rows, the list gives way. */
+/**
+ * The option list gives way before the question does: when a window of even one
+ * row plus its marker will not fit, one line stating how many are hidden is
+ * more use than a truncated list that looks complete.
+ */
+const VIEW_FIRST: Density = {
+	...FULL_DENSITY,
+	preview: false,
+	descriptions: false,
+	air: false,
+	header: false,
+	tabs: false,
+	options: false,
+};
+
+/** The text editor is the last thing to give way, because it is being used. */
 const EDITOR_FIRST: Density = {
 	...FULL_DENSITY,
 	preview: false,
@@ -438,6 +522,15 @@ const EDITOR_FIRST: Density = {
 interface RowWindow {
 	start: number;
 	end: number;
+	/**
+	 * Whether the `… N more` markers are drawn at all.
+	 *
+	 * They are the first thing dropped when space runs out: a marker exists to
+	 * tell the user the list is incomplete, and if there is not even room for the
+	 * marker plus one row, showing the row unannounced still beats showing
+	 * nothing. Defaults to true.
+	 */
+	markers?: boolean;
 }
 
 /** Height of every option block, preview included, under a given density. */
@@ -471,9 +564,12 @@ function chooseWindow(heights: number[], focus: number, budget: number): RowWind
 		}
 	}
 
-	// Even one block plus its markers does not fit: drop the markers and show the
-	// focused row alone. A marked focus beats a blank list.
-	return { start: focus, end: Math.min(total, focus + 1) };
+	// Even the focused block plus its markers does not fit. Drop the markers and
+	// render one row unannounced -- the caller knows the budget, and a lone option
+	// the user can still act on beats a list they cannot see. `markers: false`
+	// is load-bearing: optionSection must honour it, or its output is one row
+	// taller than the fit calculation assumed and every retry fails.
+	return { start: focus, end: Math.min(total, focus + 1), markers: false };
 }
 
 function optionSection(
@@ -511,14 +607,17 @@ function optionSection(
 		return lines;
 	}
 
-	if (window.start > 0) lines.push(elide(hidden(0, window.start), "above"));
+	const showMarkers = window.markers !== false;
+	if (showMarkers && window.start > 0) lines.push(elide(hidden(0, window.start), "above"));
 	for (let index = window.start; index < window.end; index++) {
 		const option = state.options[index];
 		if (option === undefined) continue;
 		lines.push(...optionRow(option, index, state, palette, width, density.descriptions));
 		if (density.preview && index === state.index) lines.push(...previewPane(option, palette, width));
 	}
-	if (window.end < state.options.length) lines.push(elide(hidden(window.end, state.options.length), "below"));
+	if (showMarkers && window.end < state.options.length) {
+		lines.push(elide(hidden(window.end, state.options.length), "below"));
+	}
 	return lines;
 }
 
@@ -528,6 +627,7 @@ function bodyLines(
 	width: number,
 	density: Density,
 	window: RowWindow | undefined,
+	submitBudget: number | undefined,
 ): { lines: string[]; editor: number } {
 	const lines: string[] = [];
 
@@ -540,7 +640,11 @@ function bodyLines(
 	const tab = state.tabs[state.tab];
 
 	if (isSubmit) {
-		lines.push(...submitLines(state, palette, width));
+		lines.push(
+			...(submitBudget === undefined
+				? submitLines(state, palette, width, density.air)
+				: submitWindowed(state, palette, width, density.air, submitBudget)),
+		);
 		return { lines, editor: 0 };
 	}
 	if (tab === undefined) return { lines, editor: 0 };
@@ -590,9 +694,13 @@ function assemble(
 	width: number,
 	density: Density,
 	window: RowWindow | undefined,
+	budget?: number,
 ): { head: string[]; tail: string[]; editor: number } {
 	const layout = titleLayout(width);
-	const body = bodyLines(state, palette, width, density, window);
+	// The Submit page is windowed against whatever the head and tail leave over.
+	const tailHeight = (density.air ? 1 : 0) + countdownLine(state, palette).length + hintLine({ ...state, focus: "browse" }, palette, width).length + 1;
+	const submitBudget = budget === undefined ? undefined : budget - 1 - tailHeight;
+	const body = bodyLines(state, palette, width, density, window, submitBudget);
 	const head = [titleBar(palette, layout), ...body.lines];
 	const tail = [
 		...(density.air ? [""] : []),
@@ -601,19 +709,6 @@ function assemble(
 		rule(palette, width),
 	];
 	return { head, tail, editor: body.editor };
-}
-
-/**
- * Last resort: the head is taller than the rows left for it. Keep the top and
- * the tail (countdown + hints + rule) and elide the middle, because a dialog
- * whose key hints scrolled off the screen is a dialog the user cannot leave.
- */
-function clipHead(head: string[], budget: number, palette: Palette): string[] {
-	if (budget <= 0) return [];
-	if (head.length <= budget) return head;
-	const marker = palette.fg("dim", "  … terminal too short — c collapses this dialog");
-	if (budget === 1) return [marker];
-	return [...head.slice(0, budget - 1), marker];
 }
 
 /**
@@ -635,14 +730,23 @@ function clipHead(head: string[], budget: number, palette: Palette): string[] {
  * a shortened list can never be mistaken for a complete one.
  */
 export function renderDialog(state: ViewState, palette: Palette, width: number, maxHeight?: number): string[] {
-	const w = Math.max(MIN_WIDTH, width);
-	const budget = maxHeight === undefined ? undefined : Math.max(MIN_HEIGHT, Math.floor(maxHeight));
+	// Never widen past what the caller offered, and never claim a budget larger
+	// than the one we were given: the host allocated those rows, not us.
+	const w = Math.max(1, Math.floor(width));
+	const budget = maxHeight === undefined ? undefined : Math.max(1, Math.floor(maxHeight));
+
+	// Below the minimum a dialog cannot identify itself: title, question, one
+	// option and the hints already exceed the space. The one-line summary spends
+	// its single row on the two things that still matter -- what this is, and how
+	// to get it back -- which beats a truncated "terminal too short" marker that
+	// says neither.
+	if (budget !== undefined && budget < MIN_HEIGHT) return [renderCollapsed(state, palette, w)];
 
 	let view = state;
 	const capped = capEditorLines(view, 1);
 	let density = FULL_DENSITY;
 	let window: RowWindow | undefined;
-	let parts = assemble(view, palette, w, density, undefined);
+	let parts = assemble(view, palette, w, density, undefined, budget);
 	const fits = (candidate: { head: string[]; tail: string[] }) =>
 		budget === undefined || candidate.head.length + candidate.tail.length <= budget;
 
@@ -652,7 +756,7 @@ export function renderDialog(state: ViewState, palette: Palette, width: number, 
 			if (fits(parts)) break;
 			density = lean;
 			window = undefined;
-			parts = assemble(view, palette, w, density, undefined);
+			parts = assemble(view, palette, w, density, undefined, budget);
 		}
 
 		// 2. Shrink the option list itself, centred on the highlighted row.
@@ -662,12 +766,12 @@ export function renderDialog(state: ViewState, palette: Palette, width: number, 
 			const focus = Math.max(0, Math.min(view.options.length - 1, view.index));
 			const attempt = (source: ViewState) => {
 				const heights = blockHeights(source, palette, w, density);
-				const base = assemble(source, palette, w, density, undefined);
+				const base = assemble(source, palette, w, density, undefined, budget);
 				const overhead = base.head.length - heights.reduce((sum, height) => sum + height, 0);
 				const available = budget - overhead - base.tail.length;
 				if (available < 1) return undefined;
 				const slice = chooseWindow(heights, focus, available);
-				const rendered = assemble(source, palette, w, density, slice);
+				const rendered = assemble(source, palette, w, density, slice, budget);
 				return fits(rendered) ? { view: source, window: slice, parts: rendered } : undefined;
 			};
 			// A multi-line editor is a luxury when rows are short: prefer the
@@ -681,21 +785,35 @@ export function renderDialog(state: ViewState, palette: Palette, width: number, 
 			}
 		}
 
-		// 3. Still too tall with the text editor open: the editor wins. A one-row
-		//    window out of eight says nothing useful anyway, so state the count in
-		//    a single line and spend the rows on the box being typed into.
+		// 3. A one-row window out of a long list says nothing useful anyway, so
+		//    when even a window will not fit, state the count in a single line and
+		//    spend the rows on everything that identifies the dialog.
+		if (!fits(parts) && view.options.length > 0) {
+			density = VIEW_FIRST;
+			window = undefined;
+			parts = assemble(view, palette, w, density, window, budget);
+		}
+
+		// 4. The text editor is the last thing to give way: typing into a box the
+		//    terminal clipped is worse than losing a hint. This can still leave the
+		//    dialog too tall, in which case the caller's budget wins and the frame
+		//    is cut -- but that only happens on terminals too short to be a dialog.
 		if (!fits(parts) && view.focus !== "browse") {
 			density = EDITOR_FIRST;
 			view = capped;
 			window = undefined;
-			parts = assemble(view, palette, w, density, window);
+			parts = assemble(view, palette, w, density, window, budget);
 		}
 	}
 
-	// The tail (countdown, hints, rule) always survives; only the head can clip.
-	const room = budget === undefined ? undefined : Math.max(0, budget - parts.tail.length);
-	const head = room === undefined ? parts.head : clipHead(parts.head, room, palette);
-	const lines = [...head, ...parts.tail];
+	// Still too tall after every density and the option list have given way. That
+	// means the question itself cannot be shown with its title and its hints: the
+	// terminal is simply too small for a dialog. A clipped frame would be a
+	// fragment with no title and no way out; the one-line summary is at least
+	// self-describing and tells the user how to get the real thing back.
+	if (budget !== undefined && !fits(parts)) return [renderCollapsed(state, palette, w)];
+
+	const lines = budget === undefined ? [...parts.head, ...parts.tail] : [...parts.head, ...parts.tail].slice(0, budget);
 
 	// A terminal line must never exceed the width it was given.
 	return lines.map((line) => pad(truncateToWidth(line, w, "…", false), w));
@@ -725,8 +843,34 @@ export function renderCollapsed(state: ViewState, palette: Palette, width?: numb
 	const answered = state.tabs.filter((tab) => tab.answered).length;
 	const name = state.tab >= state.tabs.length ? "submit" : (state.tabs[state.tab]?.header ?? "");
 	const extra = state.countdown !== undefined ? ` · ⏱ ${Math.max(0, Math.floor(state.countdown))}s` : "";
-	const body = ` ask_user_question · ${name} · ${answered}/${state.tabs.length} answered${extra} · ctrl+] or c to expand`;
 	const button = expandButton(width);
+
+	// Priority order while the row shrinks: the button, then how to expand, then
+	// which question this is, then the counts. A collapsed dialog whose button
+	// got truncated to "[ + ] ask_user_ques…" tells the user neither what it is
+	// nor how to bring it back -- the one row it was given has to carry that.
+	const primary = ` ask_user_question · ${name}`;
+	const counts = ` · ${answered}/${state.tabs.length} answered${extra}`;
+	// A running countdown is the one fact that changes what the user should do
+	// *right now* (answer, or the autopilot decides for them), so it outranks
+	// both the product name and the answered count when the row is tight.
+	const full = `${primary}${counts} · ctrl+] or c to expand`;
+	const seconds = Math.max(0, Math.floor(state.countdown ?? 0));
+	const timed = ` ⏱ ${seconds}s · c to expand`;
+	const timedTight = ` ⏱${seconds}s · c`;
+	const terse = `${primary} · c to expand`;
+	// Below ~26 columns the product name does not fit alongside the instruction,
+	// and the instruction is the part that cannot be inferred from the screen.
+	const minimal = " c to expand";
+	const bare = "";
+
+	const room = width === undefined ? undefined : Math.max(1, width) - visibleWidth(button);
+	const tiers =
+		state.countdown !== undefined
+			? [full, timed, timedTight, minimal, bare]
+			: [full, terse, minimal, bare];
+	const body = room === undefined ? tiers[0] ?? full : tiers.find((text) => visibleWidth(text) <= room) ?? bare;
+
 	const line = palette.fg("accent", button) + palette.fg("dim", body);
 	return width === undefined ? line : pad(truncateToWidth(line, Math.max(1, width), "…", false), Math.max(1, width));
 }
