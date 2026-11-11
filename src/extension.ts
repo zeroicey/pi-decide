@@ -20,6 +20,7 @@ import { loadConfig, type DecideConfig } from "./config.ts";
 import { synthesizeAnswers } from "./decide.ts";
 import { buildTranscript } from "./transcript.ts";
 import { QuestionnaireDialog, type DialogOutcome } from "./ui/dialog.ts";
+import { askNatively } from "./ui/native.ts";
 import { buildResult, rejected, type ToolResult } from "./tool/envelope.ts";
 import { QuestionnaireSchema, TOOL_NAME } from "./tool/schema.ts";
 import { validateQuestionnaire } from "./tool/validate.ts";
@@ -32,6 +33,8 @@ const TOOL_DESCRIPTION = `Ask the user one or more structured questions when a d
 The dialog offers written-out options with descriptions, a free-text row, per-question notes, and a Submit tab that reviews everything before it goes back. Up to 8 questions with 2-8 options each. Provide a \`preview\` (markdown mockup, diff, config) when the choice is easier to see than to describe.
 
 Set \`multiSelect: true\` when the options are not mutually exclusive and the user may want several of them — "which of these should I also handle?", "select every check that applies", "which files may I touch?". The dialog then renders checkboxes that toggle with Space, and the answer comes back with every checked label. Do not force a non-exclusive choice into a single one with an "all of the above" option: that label is ambiguous about ordering and impossible for the autopilot to reason about.
+
+Hosts that cannot draw the dialog (remote UIs such as T3 Code, which run Pi in RPC mode) get one native prompt per question instead: options as clickable rows plus a free-text row, and multi-select as a toggle list that ends on Done. Same envelope, just several prompts.
 
 Autopilot: when the session policy is \`on\`, or the host has no UI, or the user is away and the countdown expires, a model answers these questions on the user's behalf and the result is labelled as such. Mark your own best option with \`recommended\` — the autopilot uses it as the default, so a good recommendation is what keeps an unattended run on track.`;
 
@@ -92,13 +95,33 @@ function fromDialog(questionnaire: Questionnaire, outcome: Extract<DialogOutcome
 	};
 }
 
-/** Show the dialog and wait. Resolves with the dialog's outcome, never throws. */
+/**
+ * Whether this host can draw a component inside its UI.
+ *
+ * Only the terminal can. `rpc` hosts (T3 Code and every other remote UI) report
+ * `hasUI: true` so `hostKind` still says a human is there — but Pi documents
+ * that `ui.custom()` returns `undefined` for them, because a component factory
+ * has nowhere to render. Asking through `custom()` there is a silent crash, so
+ * those hosts take the native prompt path instead.
+ */
+function canRenderComponent(ctx: ExtensionContext): boolean {
+	return ctx.mode === "tui";
+}
+
+/**
+ * Show the terminal dialog and wait.
+ *
+ * The declared type is honest about the runtime: a host that cannot render a
+ * component resolves this with `undefined` (see `canRenderComponent`). Callers
+ * must handle that instead of assuming an outcome — assuming it is exactly the
+ * crash this path used to produce on T3.
+ */
 function showDialog(
 	ctx: ExtensionContext,
 	questionnaire: Questionnaire,
 	timeoutSeconds: number,
 	options: { hint?: string; deadlineKind?: "auto" | "deadline" } = {},
-): Promise<DialogOutcome> {
+): Promise<DialogOutcome | undefined> {
 	return ctx.ui.custom<DialogOutcome>((tui, theme, keybindings, done) => {
 		const dialog = new QuestionnaireDialog({
 			questionnaire,
@@ -408,19 +431,35 @@ export default function piDecide(pi: ExtensionAPI): void {
 			}
 
 			const unansweredHeaders = questionnaire.questions.map((question) => question.header);
-			let outcome: DialogOutcome;
+			let outcome: DialogOutcome | undefined;
 			try {
 				emitBell(resolved.policy, host);
-				outcome = await showDialog(ctx, questionnaire, resolved.policy.timeoutSeconds, {
-					deadlineKind: resolved.deadlineKind,
-					...(resolved.mode === "auto" && resolved.policy.timeoutSeconds > 0
-						? { hint: "no one has answered" }
-						: {}),
-				});
+				// Two ways to put the question to a human: the terminal dialog, or — on
+				// hosts that cannot render a component — Pi's own prompt per question.
+				outcome = canRenderComponent(ctx)
+					? await showDialog(ctx, questionnaire, resolved.policy.timeoutSeconds, {
+						deadlineKind: resolved.deadlineKind,
+						...(resolved.mode === "auto" && resolved.policy.timeoutSeconds > 0
+							? { hint: "no one has answered" }
+							: {}),
+					})
+					: await askNatively(ctx.ui, questionnaire, resolved.policy.timeoutSeconds, {
+						...(signal !== undefined ? { signal } : {}),
+					});
 			} catch (error) {
 				return rejected(
 					questionnaire,
 					`the questionnaire UI could not be shown (${error instanceof Error ? error.message : String(error)}). The user never saw these questions — do NOT treat this as a decline. Ask them as plain chat text instead.`,
+					true,
+				);
+			}
+
+			// A `custom()` call on a host that cannot render components resolves
+			// `undefined`: the questions were never shown, so this is not a decline.
+			if (outcome === undefined) {
+				return rejected(
+					questionnaire,
+					`this host reported UI support but could not render the questionnaire, and its native prompt fallback did not answer either. The user never saw these questions — do NOT treat this as a decline. Ask them as plain chat text instead.`,
 					true,
 				);
 			}

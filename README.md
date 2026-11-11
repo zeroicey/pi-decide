@@ -271,6 +271,33 @@ The model is told to reach for this when options are not mutually exclusive —
 an invented "All of the above" option loses which items were actually chosen,
 and gives the autopilot nothing to reason about.
 
+## Hosts without a dialog (RPC, T3 Code)
+
+A remote UI drives Pi with `pi --mode rpc`, and in that mode `ui.custom()`
+returns `undefined` — Pi renders no component there. The questionnaire therefore
+falls back to Pi's own prompts, which those hosts *do* render: one
+`ui.select()` per question, each becoming a native prompt card with the option
+labels as rows, the descriptions folded into the card text, the recommendation
+marked `★ recommended`, and the host's own free-text row kept.
+
+What changes, and what does not:
+
+| | Terminal (TUI) | RPC host (T3 Code) |
+| --- | --- | --- |
+| Questions per screen | all, as tabs | one card each |
+| Option descriptions | beside each row | in the card text |
+| Free text | `Type something.` row | host's own answer box |
+| `multiSelect` | checkboxes, one submit | toggle list, ends on `✅ Done` |
+| Notes, Submit review page | yes | no |
+| `preview` | full, beside the list | first ~280 characters, folded in |
+| Deadline | countdown in the dialog | passed down as the prompt's timeout |
+| Envelope, autopilot, safety rail | identical | identical |
+
+A deadline that expires on these hosts produces the same `autopilot` hand-off
+the dialog produces, so "nobody answered" never turns into "the user said no".
+If a host claims UI support but answers neither way, the tool returns an error
+envelope saying the questions were never seen — never a decline.
+
 ## Running unattended
 
 The intended pattern:
@@ -308,6 +335,8 @@ Every claim below was exercised against a real Pi process, not only in unit test
 | Irreversible question with no cautious option | **refused**; the model is told to stop and report it blocked |
 | `off` policy, real TUI dialog | tabs, stars, notes, free text and the Submit review page all behave as documented |
 | `off` policy, nobody answers | the 15 min safety net fires and the envelope says so |
+| RPC host, one question (rpc probe against a real `pi --mode rpc`) | `ui.select` prompt emitted, answer recorded, envelope labelled `[user]` |
+| RPC host before this fallback existed | `Cannot read properties of undefined (reading 'kind')` — fixed, now the prompt path |
 | `auto 6`, nobody touching the keyboard | self-answered after 6s, envelope says `[timeout, after 6s]` |
 | Keys arriving after the dialog settled | ignored without throwing |
 | Widths 0–140 columns, CJK / emoji / ZWJ / BiDi / ANSI in a preview | no over-wide line, no throw |
