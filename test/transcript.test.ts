@@ -59,6 +59,38 @@ describe("buildTranscript", () => {
 		expect(text).not.toContain("message 6");
 	});
 
+	test("spends the character budget newest-first, so overflow cuts the oldest turn", () => {
+		// Ten turns that jointly overflow maxTailChars. The count limit is not
+		// the binding one here, so the char cap alone decides who survives —
+		// and it must be the turns closest to the question, never the opening
+		// of the conversation.
+		const entries = Array.from(
+			{ length: 10 },
+			(_, index) => messageEntry("user", `turn ${index}: ${"context ".repeat(60)}`),
+		);
+		const text = buildTranscript(entries, { tailMessages: 10, maxTailChars: 600 });
+		expect(text).toContain("turn 9");
+		expect(text).toContain("turn 8");
+		expect(text).toContain("chars omitted");
+		expect(text).not.toContain("turn 0");
+		expect(text.length).toBeLessThan(700);
+	});
+
+	test("truncates the newest entry itself when it alone overflows the cap", () => {
+		// The newest turn is bigger than the whole budget: it gets the budget
+		// (truncated), and the older turn is dropped entirely. Keeping the
+		// older turn instead would hand the judge the least relevant line.
+		const entries = [
+			messageEntry("user", "x".repeat(500)),
+			messageEntry("assistant", [textBlock("y".repeat(500))]),
+		];
+		const text = buildTranscript(entries, { tailMessages: 5, maxTailChars: 200 });
+		expect(text).toContain("[assistant]");
+		expect(text).toContain("chars omitted");
+		expect(text).not.toContain("[user]");
+		expect(text.length).toBeLessThan(300);
+	});
+
 	test("caps the total size", () => {
 		const entries = [messageEntry("user", "x".repeat(500)), messageEntry("assistant", [textBlock("y".repeat(500))])];
 		const text = buildTranscript(entries, { tailMessages: 5, maxTailChars: 200 });
